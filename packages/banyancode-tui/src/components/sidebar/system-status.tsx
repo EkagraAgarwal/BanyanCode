@@ -1,5 +1,5 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { createMemo, onMount, Show } from "solid-js"
+import { createMemo, onCleanup, onMount, Show } from "solid-js"
 import { formatBytes } from "../../data/format"
 import type { SystemLive } from "../../data/live"
 import { palette, type Palette } from "../../theme"
@@ -20,14 +20,58 @@ function MeterBar(props: { readonly percent: number; readonly theme: Palette }) 
   )
 }
 
-/** Ported from v1 `sidebar/system-status.tsx` (CPU / memory / disk / GPU). */
-export function SystemPanel(props: { readonly context: Context; readonly system: SystemLive }) {
-  const theme = () => palette(props.context.theme)
+/** How often the panel pulls host status while it is mounted. */
+export const SYSTEM_POLL_MS = 5_000
+/** One short follow-up sample so the CPU row's delta is not a tick behind. */
+export const SYSTEM_PRIME_MS = 1_000
 
+/** Test seam: the timer functions the poll is scheduled with. */
+export interface SystemPanelTimers {
+  readonly setTimeout: (handler: () => void, ms: number) => ReturnType<typeof setTimeout>
+  readonly clearTimeout: (handle: ReturnType<typeof setTimeout>) => void
+  readonly setInterval: (handler: () => void, ms: number) => ReturnType<typeof setInterval>
+  readonly clearInterval: (handle: ReturnType<typeof setInterval>) => void
+}
+
+export interface SystemPanelProps {
+  readonly context: Context
+  readonly system: SystemLive
+  readonly timers?: SystemPanelTimers
+}
+
+/** Ported from v1 `sidebar/system-status.tsx` (CPU / memory / disk / GPU). */
+export function SystemPanel(props: SystemPanelProps) {
+  const theme = () => palette(props.context.theme)
+  const timers = props.timers ?? { setTimeout, clearTimeout, setInterval, clearInterval }
+
+  // Host health is data, not animation, so it keeps refreshing with animations
+  // off; only a spinner would be gated. The panel owns this timer: an event-only
+  // panel froze for good the moment a single push was missed, because nothing
+  // ever asked again.
   onMount(() => {
-    void props.system.refresh()
+    let stopped = false
+    let inFlight = false
+    const poll = () => {
+      // A slow sample must not stack a second call behind itself.
+      if (stopped || inFlight) return
+      inFlight = true
+      void props.system.refresh().finally(() => {
+        inFlight = false
+      })
+    }
+    // The first sample only primes the CPU baseline (a delta between two
+    // snapshots), so it has no percentage. This follow-up makes the CPU row
+    // appear within a second instead of waiting for the first 5s tick.
+    const prime = timers.setTimeout(poll, SYSTEM_PRIME_MS)
+    const interval = timers.setInterval(poll, SYSTEM_POLL_MS)
+    poll()
     void props.system.refreshLsp()
     void props.system.refreshYolo()
+    onCleanup(() => {
+      stopped = true
+      timers.clearTimeout(prime)
+      timers.clearInterval(interval)
+    })
   })
 
   const memoryPercent = createMemo(() => {

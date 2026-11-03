@@ -459,11 +459,37 @@ export function createLive(context: Context): Live {
   const [yoloValue, setYoloValue] = createSignal<boolean | undefined>(undefined)
   const [yoloAvailability, setYoloAvailability] = createSignal<Availability>("unknown")
 
+  // The sampler caches its status for a second, so a push and a poll land on
+  // identical numbers. Compare before writing the signal: a redundant write
+  // re-renders the whole panel for nothing.
+  const sameSystemStatus = (left: SystemStatus | undefined, right: SystemStatus) =>
+    left !== undefined &&
+    left.cpuPercent === right.cpuPercent &&
+    left.memoryUsedBytes === right.memoryUsedBytes &&
+    left.memoryTotalBytes === right.memoryTotalBytes &&
+    left.diskUsedBytes === right.diskUsedBytes &&
+    left.diskTotalBytes === right.diskTotalBytes &&
+    left.gpuPercent === right.gpuPercent &&
+    left.vramUsedBytes === right.vramUsedBytes &&
+    left.gpuTotalBytes === right.gpuTotalBytes
+
+  const applySystemStatus = (next: SystemStatus) => {
+    const previous = sysStatus()
+    // CPU is a delta, so an early sample has none. Keep the last number rather
+    // than unmounting the row for a tick.
+    const merged =
+      next.cpuPercent === undefined && previous?.cpuPercent !== undefined
+        ? { ...next, cpuPercent: previous.cpuPercent }
+        : next
+    if (sameSystemStatus(previous, merged)) return
+    setSysStatus(merged)
+  }
+
   const refreshSystem = async () => {
     const result = await attempt(() => rpc.system.status({}))
     if (disposed) return
     setSysAvailability(availabilityOf(result))
-    if (result.ok) setSysStatus(result.value)
+    if (result.ok) applySystemStatus(result.value)
   }
 
   const refreshLsp = async () => {
@@ -485,7 +511,7 @@ export function createLive(context: Context): Live {
   }
 
   const onSystem = rpc.system.events.on("updated", (event) => {
-    setSysStatus(event.data)
+    applySystemStatus(event.data)
     setSysAvailability("available")
   })
   disposers.push(onSystem)

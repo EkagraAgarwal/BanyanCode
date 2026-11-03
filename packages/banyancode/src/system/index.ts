@@ -1,12 +1,12 @@
 import type { Context } from "@opencode/plugin/effect/plugin"
 import { Path as GlobalPath } from "@opencode/util/global"
-import { Effect, type Scope } from "effect"
+import { Cause, Effect, type Duration, Fiber, Scope } from "effect"
 import { MAX_SUBAGENTS_LIMIT, DEFAULT_MAX_SUBAGENTS } from "../config/index.js"
 import type { Interface as ConfigInterface } from "../config/service.js"
 import type { WriteTarget } from "../config/writer.js"
 import type { Interface as StorageInterface } from "../storage/service.js"
 import { registerCommands } from "./commands.js"
-import { createSystemMonitor } from "./monitor.js"
+import { createSystemMonitor, type SystemMonitor } from "./monitor.js"
 import { heartbeat, pingOnFirstRun } from "./install-telemetry.js"
 import { Definition, handlers, publishStatus } from "./rpc.js"
 import { buildSystemTools, NAME_SYSTEMINFO, NAME_SYSTEM_STATUS, NAME_TOOL_SEARCH } from "./tools.js"
@@ -24,11 +24,21 @@ import { buildSystemTools, NAME_SYSTEMINFO, NAME_SYSTEM_STATUS, NAME_TOOL_SEARCH
 export interface SystemDeps {
   readonly storage: StorageInterface
   readonly config: ConfigInterface
+  /** Test seam: the host sampler. Defaults to a real monitor on the host machine. */
+  readonly monitor?: SystemMonitor
+  /** Test seam: push cadence. Defaults to `STATUS_INTERVAL`. */
+  readonly statusInterval?: Duration.Input
 }
 
 export const TOOL_IDS = [NAME_SYSTEM_STATUS, NAME_SYSTEMINFO, NAME_TOOL_SEARCH] as const
 
-const STATUS_INTERVAL = "15 seconds"
+/**
+ * Sampled push cadence. The TUI also polls `status` while its panel is mounted,
+ * so this is only the live channel; 5s is fast enough that a change lands in the
+ * same glance as the poll and slow enough that idle CPU stays at zero (each tick
+ * spawns no timer of its own beyond the loop's sleep).
+ */
+export const STATUS_INTERVAL = "5 seconds"
 
 export const writeTarget = (ctx: Context): WriteTarget => ({
   directory: ctx.location.directory,
@@ -60,7 +70,13 @@ const registerTelemetry = (ctx: Context, config: ConfigInterface): Effect.Effect
 export const register = (ctx: Context, deps: SystemDeps): Effect.Effect<void, never, Scope.Scope> =>
   Effect.gen(function* () {
     const target = writeTarget(ctx)
-    const monitor = createSystemMonitor()
+    const monitor = deps.monitor ?? createSystemMonitor()
+    // Prime the CPU delta plus the disk/GPU caches once. CPU is a delta between
+    // two snapshots, so without this the first `status` call (the TUI's mount
+    // read, and the first publish) has no percentage at all and the row is
+    // hidden until a second sample lands. Best effort: a failed probe must not
+    // fail activation.
+    yield* Effect.promise(() => monitor.status()).pipe(Effect.ignore)
 
     yield* ctx.tool
       .transform((editor) => {
@@ -94,14 +110,31 @@ export const register = (ctx: Context, deps: SystemDeps): Effect.Effect<void, ne
 
     yield* registerTelemetry(ctx, deps.config)
 
-    // v1 `banyancode.system.updated` was a sampled stream. The TUI polls
-    // `status` too, so a slow interval is enough and keeps idle CPU at zero.
-    yield* Effect.forever(
-      Effect.sleep(STATUS_INTERVAL).pipe(
-        Effect.andThen(Effect.promise(() => monitor.status())),
-        Effect.andThen((status) => publishStatus(rpc, status)),
-      ),
-    ).pipe(Effect.forkScoped({ startImmediately: true }))
+    // Sampled push, owned explicitly: the fiber is detached from the fiber that
+    // happens to be running registration (a scoped fork needs a live Scope in
+    // context and dies with it) and torn down by a finalizer on the plugin's
+    // activation scope, so a reload never leaves a second publisher behind.
+    // Each iteration is guarded: one rejected probe must not end the stream for
+    // the rest of the process.
+    const scope = yield* Scope.Scope
+    const publisher = yield* Effect.forkDetach(
+      Effect.gen(function* () {
+        yield* Effect.sleep(deps.statusInterval ?? STATUS_INTERVAL)
+        yield* Effect.forever(
+          Effect.gen(function* () {
+            const status = yield* Effect.promise(() => monitor.status())
+            yield* publishStatus(rpc, status)
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("banyancode: system status sample failed; retrying on the next tick", {
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
+        )
+      }),
+    )
+    yield* Scope.addFinalizer(scope, Fiber.interrupt(publisher).pipe(Effect.asVoid))
   })
 
 export { Definition as SystemRpcDefinition, handlers as systemRpcHandlers } from "./rpc.js"
