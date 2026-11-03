@@ -203,6 +203,20 @@ const GrowthDefinition = Schema.Struct({
 })
 export type GrowthDefinition = Schema.Schema.Type<typeof GrowthDefinition>
 
+/** What a tool call does to the workspace, for the block that draws it. */
+export const ToolKindRole = Schema.Literals(["read", "search", "edit", "shell", "verify", "web"])
+export type ToolKindRole = Schema.Schema.Type<typeof ToolKindRole>
+
+const ToolDefinition = Schema.Struct({
+  read: Schema.optional(ColorValue),
+  search: Schema.optional(ColorValue),
+  edit: Schema.optional(ColorValue),
+  shell: Schema.optional(ColorValue),
+  verify: Schema.optional(ColorValue),
+  web: Schema.optional(ColorValue),
+})
+export type ToolDefinition = Schema.Schema.Type<typeof ToolDefinition>
+
 const ThemeTokensDefinition = Schema.Struct({
   text: Schema.optional(TextDefinition),
   background: Schema.optional(BackgroundDefinition),
@@ -212,6 +226,7 @@ const ThemeTokensDefinition = Schema.Struct({
   syntax: Schema.optional(SyntaxDefinition),
   markdown: Schema.optional(MarkdownDefinition),
   growth: Schema.optional(GrowthDefinition),
+  tool: Schema.optional(ToolDefinition),
 })
 export type ThemeTokensDefinition = Schema.Schema.Type<typeof ThemeTokensDefinition>
 
@@ -279,6 +294,7 @@ const CompleteThemeTokensDefinition = Schema.Struct({
   syntax: Schema.Record(SyntaxToken, HueColorValue),
   markdown: Schema.Record(MarkdownToken, HueColorValue),
   growth: Schema.optional(GrowthDefinition),
+  tool: Schema.optional(ToolDefinition),
 })
 
 const ThemeDefinitionFields = Schema.Struct({

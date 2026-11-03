@@ -38,6 +38,9 @@ export function createComponentTheme(
     get growth() {
       return view().growth
     },
+    get tool() {
+      return view().tool
+    },
     source: (color: RGBA) => view().source(color),
     increase: (color: RGBA, amount = 1) => view().increase(color, amount),
     decrease: (color: RGBA, amount = 1) => view().decrease(color, amount),

@@ -95,6 +95,7 @@ function tokens(definition: ThemeTokensDefinition): ThemeTokensDefinition {
     syntax: definition.syntax,
     markdown: definition.markdown,
     ...(definition.growth ? { growth: definition.growth } : {}),
+    ...(definition.tool ? { tool: definition.tool } : {}),
   }
 }
 
@@ -144,6 +145,7 @@ function resolveView(
 ): ResolvedThemeTokens {
   const source: Record<string, unknown> = { hue, ...definition }
   const resolved = createResolver(source)(source, "theme") as ResolvedThemeTokens
+  const growth = resolveGrowth(resolved.growth, hue, resolved)
   return {
     ...resolved,
     hue,
@@ -158,7 +160,8 @@ function resolveView(
       action: statefulActions(resolved.background.action),
       formfield: statefulColor(resolved.background.formfield),
     },
-    growth: resolveGrowth(resolved.growth, hue, resolved),
+    growth,
+    tool: resolveTool(resolved.tool, resolved, growth),
     ...hueSteps,
   }
 }
@@ -182,6 +185,34 @@ function resolveGrowth(
     wood: growth?.wood ?? resolved.text.muted,
     bright: growth?.bright ?? resolved.text.base,
   }
+}
+
+// Tool colours are optional too. A theme that names none still gets distinct, readable
+// roles from the tokens it already has; `web` has no existing role, so it falls back to
+// the text colour rather than borrowing an unrelated token.
+function resolveTool(
+  tool: Partial<ResolvedThemeTokens["tool"]> | undefined,
+  resolved: ResolvedThemeTokens,
+  growth: ResolvedThemeTokens["growth"],
+): ResolvedThemeTokens["tool"] {
+  const sky = resolved.text.feedback.info.base
+  return {
+    read: tool?.read ?? sky,
+    search: tool?.search ?? blend(sky, resolved.text.muted, 0.55),
+    edit: tool?.edit ?? growth.leaf,
+    shell: tool?.shell ?? growth.wood,
+    verify: tool?.verify ?? growth.highlight,
+    web: tool?.web ?? resolved.text.base,
+  }
+}
+
+function blend(from: RGBA, to: RGBA, amount: number) {
+  return RGBA.fromValues(
+    from.r + (to.r - from.r) * amount,
+    from.g + (to.g - from.g) * amount,
+    from.b + (to.b - from.b) * amount,
+    from.a + (to.a - from.a) * amount,
+  )
 }
 
 function contrastRatio(color: RGBA, background: RGBA) {

@@ -151,6 +151,14 @@
       "wood": "$hue.bark.300",
       "bright": "$hue.gray.100"
     },
+    "tool": {
+      "read": "$hue.sky.300",
+      "search": "$hue.sky.200",
+      "edit": "$hue.green.300",
+      "shell": "$hue.bark.300",
+      "verify": "$hue.lime.300",
+      "web": "$hue.violet.300"
+    },
     "@dialog": {
       "background": {
         "base": "$background.raised.base"
@@ -271,6 +279,17 @@
         "700": "#c3d9e7",
         "800": "#e0ebf3",
         "900": "#f1f6fa"
+      },
+      "violet": {
+        "100": "#3f2a78",
+        "200": "#55399a",
+        "300": "#6b4bb8",
+        "400": "#8a6dd0",
+        "500": "#a88fe0",
+        "600": "#c1aeea",
+        "700": "#d6c9f1",
+        "800": "#e9e2f7",
+        "900": "#f5f1fb"
       },
       "accent": "$hue.green",
       "interactive": "$hue.sky",
@@ -394,6 +413,17 @@
         "700": "#284761",
         "800": "#172e42",
         "900": "#0a1824"
+      },
+      "violet": {
+        "100": "#e7ddfa",
+        "200": "#d0c1f2",
+        "300": "#b9a2e8",
+        "400": "#9a85c4",
+        "500": "#7c6aa2",
+        "600": "#5f5180",
+        "700": "#443a5e",
+        "800": "#2a243d",
+        "900": "#15121f"
       },
       "accent": "$hue.green",
       "interactive": "$hue.sky",

@@ -73,6 +73,15 @@ export type ResolvedThemeTokens = {
     readonly wood: RGBA
     readonly bright: RGBA
   }
+  /** One colour per tool kind, so a call's block reads by role. */
+  readonly tool: {
+    readonly read: RGBA
+    readonly search: RGBA
+    readonly edit: RGBA
+    readonly shell: RGBA
+    readonly verify: RGBA
+    readonly web: RGBA
+  }
 }
 
 export type ResolvedTheme = ResolvedThemeTokens & {

@@ -18,6 +18,7 @@ export {
   SyntaxToken,
   ThemeDefinition,
   ThemeDocument,
+  ToolKindRole,
   type BackgroundDefinition,
   type DialogTokensDefinition,
   type DiffDefinition,
@@ -29,6 +30,7 @@ export {
   type StatefulColorDefinition,
   type TextDefinition,
   type ThemeTokensDefinition,
+  type ToolDefinition,
 } from "./schema.js"
 
 export type {
