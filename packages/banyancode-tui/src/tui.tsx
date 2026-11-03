@@ -5,6 +5,8 @@ import { Show } from "solid-js"
 import { PANEL, PANEL_NAMES, PLUGIN_ID, RAIL } from "./constants"
 import { normalizeImportPath } from "./data/import-path"
 import { createLive, type Live } from "./data/live"
+import { createDismissedBranches } from "./data/dismissed"
+import { directChildren, type MeshChild } from "./data/mesh"
 import { createTicker } from "./motion"
 import { TrunkPills, TrunkRail } from "./components/trunk/trunk"
 import { encodeSessionImport, parseTranscript, transcriptToImport } from "./data/transcript"
@@ -52,6 +54,9 @@ export default Plugin.define({
     // One 12 fps clock for every animated session surface, shared by the chrome
     // today and by Trunk and Grove next. It holds no timer while nothing moves.
     const ticker = createTicker({ animations: () => context.ui.animations() })
+    // Dismissed failures are one in-memory set per root session, shared by the
+    // rail, the narrow status row and the palette command.
+    const dismissed = createDismissedBranches()
 
     // --- sidebar (v1 order) --------------------------------------------------
     context.ui.slot({
@@ -115,6 +120,7 @@ export default Plugin.define({
           mesh={live.mesh}
           ticker={ticker}
           width={input.width}
+          dismissed={dismissed}
         />
       ),
     })
@@ -122,7 +128,7 @@ export default Plugin.define({
     context.ui.slot({
       replace: "session.composer.pills",
       render: (input) => (
-        <TrunkPills context={context} sessionID={input.sessionID} mesh={live.mesh} ticker={ticker} />
+        <TrunkPills context={context} sessionID={input.sessionID} mesh={live.mesh} ticker={ticker} dismissed={dismissed} />
       ),
     })
     context.ui.slot({
@@ -215,6 +221,22 @@ export default Plugin.define({
       if (arg === "off" || arg === "false") return false
       notify(`Unknown argument "${arg}". Usage: ${usage}`, "warning")
       return undefined
+    }
+
+    // The rail's failed and killed branches for the active session, built from
+    // the same helper the rail reads so "showing" means exactly what it draws.
+    const failedBranches = (): { readonly rootID: string | undefined; readonly branches: readonly MeshChild[] } => {
+      const route = context.ui.router.current()
+      if (route.type !== "session") return { rootID: undefined, branches: [] }
+      const rootID = context.data.session.root(route.sessionID)
+      const root = live.mesh.root(rootID)
+      if (root === undefined) return { rootID, branches: [] }
+      return {
+        rootID,
+        branches: directChildren({ context, sessionID: rootID, root, killed: live.mesh.killed() }).filter(
+          (child) => child.state === "failed",
+        ),
+      }
     }
 
     context.keymap.layer(() => ({
@@ -345,6 +367,24 @@ export default Plugin.define({
           palette: true,
           run() {
             openView(context, PANEL.agents)
+          },
+        },
+        {
+          // Failed branches otherwise stay on the rail until the mesh drops the
+          // agent. Dismissing hides the row only; the agent is untouched.
+          id: "banyancode.dismiss-failed",
+          title: "Dismiss failed branches",
+          description: "Hide failed and killed rail branches without stopping their agents",
+          group: "BanyanCode",
+          palette: true,
+          enabled: () => {
+            const { rootID, branches } = failedBranches()
+            return rootID !== undefined && branches.some((child) => !dismissed.isDismissed(rootID, child.sessionID))
+          },
+          run() {
+            const { rootID, branches } = failedBranches()
+            if (rootID === undefined) return
+            dismissed.dismiss(rootID, branches.map((child) => child.sessionID))
           },
         },
         {

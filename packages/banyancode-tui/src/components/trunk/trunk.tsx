@@ -2,6 +2,7 @@ import type { Context } from "@opencode/plugin/tui/context"
 import type { RGBA } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js"
+import { createDismissedBranches, type DismissedBranches } from "../../data/dismissed"
 import type { MeshLive } from "../../data/live"
 import { directChildren, type ChildState } from "../../data/mesh"
 import { createTicker, mix, useTickerWhen, type Ticker } from "../../motion"
@@ -74,6 +75,8 @@ export function TrunkRail(props: {
   readonly height?: number | undefined
   /** Injectable clock, for tests. */
   readonly now?: (() => number) | undefined
+  /** Shared dismissal set. Omitted, the rail keeps its own for its lifetime. */
+  readonly dismissed?: DismissedBranches | undefined
 }) {
   const theme = (): Palette => palette(props.context.theme)
   const animations = () => props.context.ui.animations()
@@ -82,6 +85,7 @@ export function TrunkRail(props: {
   if (ownsTicker) onCleanup(ticker.dispose)
   const dimensions = useTerminalDimensions()
   const now = () => props.now?.() ?? Date.now()
+  const dismissed = props.dismissed ?? createDismissedBranches()
   const [measured, setMeasured] = createSignal<{ readonly width: number; readonly height: number }>()
 
   const width = () => Math.max(8, Math.floor(props.width ?? measured()?.width ?? 34))
@@ -119,7 +123,20 @@ export function TrunkRail(props: {
       messages: (sessionID) => props.context.data.session.message.list(sessionID),
       now: now(),
       maxDetail: detailArea(),
-    })
+    }).filter((branch) => !dismissed.isDismissed(rootSessionID(), branch.child.sessionID))
+  })
+
+  // End a dismissal when its branch stops being failed or leaves the mesh. The
+  // mesh root is undefined before the first successful status response; a
+  // failed poll keeps the last tree, so this never prunes from a transient miss.
+  createEffect(() => {
+    if (root() === undefined) return
+    dismissed.prune(
+      rootSessionID(),
+      children()
+        .filter((child) => child.state === "failed")
+        .map((child) => child.sessionID),
+    )
   })
 
   // Work in progress: the root turn, or any child that is running.
@@ -175,6 +192,7 @@ export function TrunkRail(props: {
 
   const rows = createMemo(() => trunkRows({ height: height(), branches: branches() }))
   const open = (sessionID: string) => props.context.ui.router.navigate({ type: "session", sessionID })
+  const dismiss = (branch: TrunkBranch) => dismissed.dismiss(rootSessionID(), [branch.child.sessionID])
 
   const trunkColor = (y: number): RGBA => mix(theme().faded, theme().highlight, busy() ? trunkLevel(y, time(), height()) : 0)
   const trunkGlyph = (row: TrunkRow) => (row.kind === "root" ? ROOT : row.kind === "branch" ? JUNCTION : TRUNK)
@@ -193,11 +211,14 @@ export function TrunkRail(props: {
   const BranchLine = (line: { readonly branch: TrunkBranch }) => {
     const age = () => Math.max(0, clock() - line.branch.child.createdAt)
     const settled = () => Math.max(0, clock() - (line.branch.child.lastActivityAt ?? line.branch.child.createdAt))
+    // Only a failed or killed branch can be dismissed. Its row reserves the
+    // last two columns (` ×`) from the label area so the width stays exact.
+    const dismissable = () => line.branch.child.state === "failed"
     const layout = createMemo(() =>
       branchLabelLayout({
         name: line.branch.child.agent,
         cells: connectorCells(age(), animations()),
-        area: area(),
+        area: area() - (dismissable() ? 2 : 0),
       }),
     )
     const opacity = () => labelOpacity(age(), animations())
@@ -257,6 +278,20 @@ export function TrunkRail(props: {
             </text>
           )}
         </For>
+        <Show when={dismissable()}>
+          <text
+            fg={theme().error}
+            wrapMode="none"
+            flexShrink={0}
+            onMouseDown={(event) => {
+              // Keep the row's own "open the session" handler from firing too.
+              event.stopPropagation()
+              dismiss(line.branch)
+            }}
+          >
+            {" ×"}
+          </text>
+        </Show>
       </box>
     )
   }
@@ -329,6 +364,8 @@ export function TrunkPills(props: {
   readonly mesh: MeshLive
   readonly ticker?: Ticker | undefined
   readonly width?: number | undefined
+  /** Shared dismissal set, so the narrow row agrees with the rail. */
+  readonly dismissed?: DismissedBranches | undefined
 }) {
   const theme = (): Palette => palette(props.context.theme)
   const animations = () => props.context.ui.animations()
@@ -336,6 +373,7 @@ export function TrunkPills(props: {
   const ticker = props.ticker ?? createTicker({ animations })
   if (ownsTicker) onCleanup(ticker.dispose)
   const dimensions = useTerminalDimensions()
+  const dismissed = props.dismissed ?? createDismissedBranches()
   const rootSessionID = createMemo(() => props.context.data.session.root(props.sessionID))
 
   onMount(() => void props.mesh.ensure(rootSessionID()))
@@ -348,13 +386,30 @@ export function TrunkPills(props: {
       killed: props.mesh.killed(),
     }),
   )
+  // Dismissed branches stop counting here too, so `+N` matches the rail.
+  const showing = createMemo(() =>
+    children().filter(
+      (child) => child.state !== "failed" || !dismissed.isDismissed(rootSessionID(), child.sessionID),
+    ),
+  )
+
+  createEffect(() => {
+    if (props.mesh.root(rootSessionID()) === undefined) return
+    dismissed.prune(
+      rootSessionID(),
+      children()
+        .filter((child) => child.state === "failed")
+        .map((child) => child.sessionID),
+    )
+  })
+
   const time = useTickerWhen(ticker, () =>
     animations() && children().some((child) => child.state === "running" || child.state === "waiting"),
   )
   const area = () => Math.max(0, (props.width ?? dimensions().width) - 2)
 
   const visible = createMemo(() => {
-    const ordered = [...children()].sort(
+    const ordered = [...showing()].sort(
       (a, b) => pillRank(a.state) - pillRank(b.state) || a.createdAt - b.createdAt,
     )
     const pills: Array<{
@@ -389,7 +444,7 @@ export function TrunkPills(props: {
   })
 
   return (
-    <Show when={children().length > 0}>
+    <Show when={showing().length > 0}>
       <box flexDirection="row" height={1} flexShrink={0} paddingLeft={1} paddingRight={1} gap={1}>
         <For each={visible().pills}>
           {(pill) => (
@@ -440,12 +495,22 @@ export function TrunkSurface(props: {
   /** Share of the terminal the rail column takes; the host's default is 22%. */
   readonly railPercent?: number | undefined
   readonly now?: (() => number) | undefined
+  /** Shared dismissal set, so a width change does not bring a row back. */
+  readonly dismissed?: DismissedBranches | undefined
 }) {
   const railWidth = () => Math.max(12, Math.round(((props.railPercent ?? 22) / 100) * props.terminalWidth))
   return (
     <Show
       when={props.terminalWidth >= TRUNK_RAIL_MIN_WIDTH}
-      fallback={<TrunkPills context={props.context} sessionID={props.sessionID} mesh={props.mesh} width={props.terminalWidth} />}
+      fallback={
+        <TrunkPills
+          context={props.context}
+          sessionID={props.sessionID}
+          mesh={props.mesh}
+          width={props.terminalWidth}
+          dismissed={props.dismissed}
+        />
+      }
     >
       <box width={railWidth()} height={props.terminalHeight} flexDirection="column">
         <TrunkRail
@@ -455,6 +520,7 @@ export function TrunkSurface(props: {
           width={railWidth()}
           height={props.terminalHeight}
           now={props.now}
+          dismissed={props.dismissed}
         />
       </box>
     </Show>
