@@ -197,7 +197,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/mini/splash.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
 | `packages/tui/test/util/presentation.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
 | `packages/core/src/permission.ts` | hook | deliver a configured deny to the `permission.evaluate` hook so a plugin (yolo) can override it; policy hooks still run later | — |
-| `packages/core/src/tool.ts` | fix | resolve a hook-rewritten tool name on the Code Mode inner-call path, not just direct calls | — |
+| `packages/core/src/tool.ts` | fix | resolve a hook-rewritten tool name on every execution path — direct calls, the Code Mode inner-call path and `Tool.check` — and run the original call when the rewritten target is not in this request's allowed tools | — |
 | `packages/plugin/src/effect/watcher.ts` | hook | exposes the native directory watcher to plugins | — |
 | `packages/core/src/filesystem/watcher.ts` | fix | a watch no longer locks the directory on Windows | — |
 | `packages/plugin/src/effect/plugin.ts` | hook | adds the watcher domain to the plugin context | — |
@@ -209,7 +209,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/core/test/plugin/host.ts` | fix | test host session mock follows the `background` SessionDomain addition | — |
 | `packages/core/test/config/policy.test.ts` | fix | prove an organization deny still wins after an earlier allow hook | — |
 | `packages/core/test/permission.test.ts` | fix | cover hook override of a configured deny and a later policy deny winning | — |
-| `packages/core/test/plugin/tool-input-repair-integration.test.ts` | fix | cover Code Mode resolving a hook-rewritten tool | — |
+| `packages/core/test/plugin/tool-input-repair-integration.test.ts` | fix | cover Code Mode resolving a hook-rewritten tool, every path resolving a rewritten Code Mode tool, and fail-closed fallback to the original call | — |
 | `packages/tui/src/plugin/builtins.ts` | hook | registers the BanyanCode TUI plugin as a built-in | — |
 | `packages/tui/package.json` | hook | workspace dependency on `@banyancode/tui` for the built-in import | — |
 | `packages/tui/test/builtins-banyancode.test.ts` | hook | pins the built-in registration | — |

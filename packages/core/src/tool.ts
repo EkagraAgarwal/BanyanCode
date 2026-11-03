@@ -334,16 +334,40 @@ const layer = Layer.effect(
                 id: Tool.CallID.make(input.call.id),
                 progress: input.progress ?? (() => Effect.void),
               }
+              // Resolve a name after hooks. `direct` holds the tools exposed as definitions; a
+              // hook-rewritten target may instead be a Code Mode tool (the repository gateway sends a
+              // relationship grep to codegraph tools), so only a rewritten name also consults the Code
+              // Mode inventory. `undefined` means this request cannot run that tool.
+              const resolve = (
+                target: string,
+              ): { readonly tool: Tool.Info; readonly name: string } | undefined => {
+                const definition = input.definitions?.get(target)
+                const name = definition?.name ?? target
+                if (name === "execute" && codeModeTool) return { tool: codeModeTool, name }
+                const directTool = direct.get(name)
+                if (directTool && (input.definitions === undefined || definition !== undefined))
+                  return { tool: directTool, name }
+                const codeTool = codeModeTool === undefined ? undefined : codeModeTools.get(name)
+                return codeTool === undefined ? undefined : { tool: codeTool, name }
+              }
               const event = yield* beforeExecute(input.call.name, input.call.input, context)
+              // A rewrite this request cannot run leaves the original call untouched: a route must
+              // never turn a permitted tool call into an unavailable-tool error.
+              if (event.tool !== input.call.name && resolve(event.tool) === undefined) {
+                yield* Effect.logDebug("execute.before rewrote to an unavailable tool; running the original call", {
+                  tool: input.call.name,
+                  rewritten: event.tool,
+                })
+                event.tool = input.call.name
+                event.input = input.call.input
+              }
               const requested = input.definitions?.get(event.tool)
               // Preserve session context removal and alias resolution, now after the repair hook.
               if (!requested && input.definitions && (direct.has(event.tool) || codeModeTool?.name === event.tool))
                 return yield* new Tool.Error({ message: `Tool is not available for this request: ${event.tool}` })
               const name = requested?.name ?? event.tool
-              if (name === "execute" && codeModeTool)
-                return yield* executeTool(codeModeTool, name, event.input, context)
-              const tool = direct.get(name)
-              if (tool) return yield* executeTool(tool, name, event.input, context)
+              const resolved = resolve(event.tool)
+              if (resolved) return yield* executeTool(resolved.tool, resolved.name, event.input, context)
               return yield* new Tool.Error({
                 message: `No tool named "${name}" is currently available. Please use a tool from the available tool list.`,
               })
@@ -383,7 +407,18 @@ const layer = Layer.effect(
                 id: Tool.CallID.make(`call_${input.context.messageID}_${index}`),
               }
               const event = yield* beforeExecute(name, toolInput, context)
-              return yield* executeTool(tool, name, event.input, context)
+              // A hook may rewrite the call. Only the tools this program may use are in `tools`, so
+              // an unavailable target runs the original call rather than pairing the original tool
+              // with the rewritten input.
+              const rewritten = event.tool === name ? undefined : tools.get(event.tool)
+              if (event.tool !== name && rewritten === undefined) {
+                yield* Effect.logDebug("check rewrote to an unavailable tool; running the original call", {
+                  tool: name,
+                  rewritten: event.tool,
+                })
+                return yield* executeTool(tool, name, toolInput, context)
+              }
+              return yield* executeTool(rewritten ?? tool, event.tool, event.input, context)
             }),
         )
       }),

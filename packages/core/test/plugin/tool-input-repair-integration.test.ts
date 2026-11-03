@@ -176,6 +176,175 @@ it.effect("resolves a hook-rewritten tool in the Code Mode inner-call path", () 
   }),
 )
 
+it.effect("runs a hook-rewritten Code Mode tool the request does not advertise", () =>
+  Effect.gen(function* () {
+    const plugins = yield* Plugin.Service
+    const registry = yield* Tool.Service
+    const executed: Array<[string, unknown]> = []
+    yield* registry.transform((draft) => {
+      draft.add({
+        name: "grep",
+        options: { codemode: false },
+        description: "Grep",
+        input: Schema.Struct({ pattern: Schema.String }),
+        execute: (input) => Effect.sync(() => void executed.push(["grep", input])).pipe(Effect.as({ content: "grep result" })),
+      })
+      draft.add({
+        name: "code_find",
+        description: "Find a symbol",
+        input: Schema.Struct({ target: Schema.String }),
+        execute: (input) =>
+          Effect.sync(() => void executed.push(["code_find", input])).pipe(Effect.as({ content: "codegraph result" })),
+      })
+    })
+    yield* plugins.activate([
+      {
+        id: "reroute",
+        revision: "1",
+        effect: (ctx) =>
+          ctx.tool.hook("execute.before", (event) =>
+            Effect.sync(() => {
+              if (event.tool !== "grep") return
+              event.tool = "code_find"
+              event.input = { target: "AuthManager" }
+            }),
+          ),
+      },
+    ])
+
+    const snapshot = yield* registry.snapshot()
+    // The model is only advertised the direct tools and `execute`; a Code Mode tool is never a
+    // definition. A route that rewrites `grep` onto one must still run it.
+    const definitions = new Map(
+      snapshot.definitions.filter((tool) => tool.name === "grep").map((tool) => [tool.name, tool] as const),
+    )
+    const result = yield* snapshot.execute({
+      ...identity,
+      definitions,
+      call: { type: "tool-call", id: "call-rewrite-codemode", name: "grep", input: { pattern: "AuthManager" } },
+    })
+    expect(executed).toEqual([["code_find", { target: "AuthManager" }]])
+    expect(result.content).toEqual([{ type: "text", text: "codegraph result" }])
+  }),
+)
+
+it.effect("fails closed when a hook rewrites to a tool this request cannot run", () =>
+  Effect.gen(function* () {
+    const plugins = yield* Plugin.Service
+    const registry = yield* Tool.Service
+    const executed: Array<[string, unknown]> = []
+    yield* registry.transform((draft) => {
+      draft.add({
+        name: "grep",
+        options: { codemode: false },
+        description: "Grep",
+        input: Schema.Struct({ pattern: Schema.String }),
+        execute: (input) => Effect.sync(() => void executed.push(["grep", input])).pipe(Effect.as({ content: "grep result" })),
+      })
+    })
+    yield* plugins.activate([
+      {
+        id: "reroute",
+        revision: "1",
+        effect: (ctx) =>
+          ctx.tool.hook("execute.before", (event) =>
+            Effect.sync(() => {
+              if (event.tool !== "grep") return
+              event.tool = "not_registered"
+              event.input = { target: "AuthManager" }
+            }),
+          ),
+      },
+    ])
+
+    const snapshot = yield* registry.snapshot()
+    const definitions = new Map(
+      snapshot.definitions.filter((tool) => tool.name === "grep").map((tool) => [tool.name, tool] as const),
+    )
+    const result = yield* snapshot.execute({
+      ...identity,
+      definitions,
+      call: { type: "tool-call", id: "call-rewrite-missing", name: "grep", input: { pattern: "TODO" } },
+    })
+    // The original tool runs with its original input, not the rewritten pair and not an error.
+    expect(executed).toEqual([["grep", { pattern: "TODO" }]])
+    expect(result.content).toEqual([{ type: "text", text: "grep result" }])
+  }),
+)
+
+it.effect("resolves a hook-rewritten tool through Tool.check and fails closed otherwise", () =>
+  Effect.gen(function* () {
+    const plugins = yield* Plugin.Service
+    const registry = yield* Tool.Service
+    const executed: Array<[string, unknown]> = []
+    const tool = (name: string, content: string) => ({
+      name,
+      description: name,
+      input: Schema.Struct({ pattern: Schema.String }),
+      execute: (input: { pattern: string }) =>
+        Effect.sync(() => void executed.push([name, input])).pipe(Effect.as({ content })),
+    })
+    yield* registry.transform((draft) => {
+      draft.add(tool("alpha", "alpha result"))
+      draft.add(tool("beta", "beta result"))
+    })
+    yield* registry.transform((draft) =>
+      draft.add({
+        name: "code_find",
+        description: "Find a symbol",
+        input: Schema.Struct({ target: Schema.String }),
+        execute: (input) =>
+          Effect.sync(() => void executed.push(["code_find", input])).pipe(Effect.as({ content: "codegraph result" })),
+      }),
+    )
+    yield* plugins.activate([
+      {
+        id: "reroute",
+        revision: "1",
+        effect: (ctx) =>
+          ctx.tool.hook("execute.before", (event) =>
+            Effect.sync(() => {
+              if (event.tool === "alpha") {
+                event.tool = "code_find"
+                event.input = { target: "AuthManager" }
+              }
+              if (event.tool === "beta") {
+                event.tool = "not_registered"
+                event.input = { pattern: "rewritten" }
+              }
+            }),
+          ),
+      },
+    ])
+
+    const check = (code: string) =>
+      registry.check({
+        code,
+        tools: ["alpha", "beta", "code_find"],
+        bindings: {},
+        permissions: [],
+        limits: {},
+        context: {
+          sessionID: identity.sessionID,
+          agent: identity.agent,
+          messageID: identity.messageID,
+          progress: () => Effect.void,
+        },
+      })
+
+    const rewritten = yield* check('return await tools.alpha({ pattern: "auth" })')
+    expect(executed).toEqual([["code_find", { target: "AuthManager" }]])
+    expect(rewritten).toMatchObject({ ok: true, value: "codegraph result" })
+
+    const fallback = yield* check('return await tools.beta({ pattern: "TODO" })')
+    expect(executed).toEqual([
+      ["code_find", { target: "AuthManager" }],
+      ["beta", { pattern: "TODO" }],
+    ])
+    expect(fallback).toMatchObject({ ok: true, value: "beta result" })
+  }),
+)
+
 it.effect("repairs namespaced inner tool input called from Code Mode", () =>
   Effect.gen(function* () {
     const plugins = yield* Plugin.Service
