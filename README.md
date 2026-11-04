@@ -18,11 +18,11 @@ One coordinated TUI for agentic coding — built on [OpenCode](https://github.co
 ---
 
 <p align="center">
-  <img src="./assets/front.png" alt="BanyanCode homescreen — the terminal-native TUI entry point showing sessions, workspace, and the command palette" width="100%" />
+  <img src="./assets/front.png" alt="BanyanCode Home screen: a banyan tree above the BANYANCODE wordmark, the prompt, and a list of recent sessions to resume" width="100%" />
 </p>
 
 <p align="center">
-  <sub>The <b>Homescreen</b> — open a session, pick a workspace, and start a coordinated team of agents.</sub>
+  <sub>The <b>Home</b> screen: type a prompt, or pick up one of your recent sessions.</sub>
 </p>
 
 ---
@@ -63,11 +63,11 @@ BanyanCode's rule is simple: **structural questions get structural tools, not ey
 The orchestrator decomposes your task and dispatches specialist agents — `scout`, `coder`, `explore`, `researcher`, `reviewer` — **concurrently**. They share state over a typed message bus, request help from each other, report progress, and surface results in a unified agent tree. A user-configurable cap with **oldest-ended eviction** keeps concurrency bounded so nothing runs away with your resources.
 
 <p align="center">
-  <img src="./assets/subagent.png" alt="BanyanCode AGENTS tab — the agent tree showing the orchestrator dispatching multiple subagents and sub-subagents in a nested hierarchy" width="100%" />
+  <img src="./assets/subagent.png" alt="BanyanCode AGENTS tab in the Trace view: each subagent on a shared timeline with token activity and tool calls, beside a panel of tokens by branch and returned summaries" width="100%" />
 </p>
 
 <p align="center">
-  <sub>The <b>AGENTS</b> tab — every subagent, every nested spawn, every token, live in one terminal.</sub>
+  <sub>The <b>AGENTS</b> tab: every subagent on one timeline, live or replayed. Switch to Roots for a map of the files they touch, or Stream for a merged log.</sub>
 </p>
 
 ### 2. Cross-Session Memory
@@ -81,11 +81,11 @@ Most agents forget between chats. BanyanCode has a **persistent memory engine**:
 `/codegraph-build` indexes your repository into a **queryable graph of symbols, callers, dependents, tests, configs, routes, and impact**. Every agent gets structural context, not just file names or grep hits. Before any edit, agents run `preflight`, `blast_radius`, `repository_trace`, and `repository_tests` to **know what breaks before they touch the code** — no 500-line read required.
 
 <p align="center">
-  <img src="./assets/agents.png" alt="BanyanCode chat window showing a live agent plan, todo tracking, and the code-graph tools in action" width="100%" />
+  <img src="./assets/agents.png" alt="BanyanCode Chat view: a transcript of parallel subagent results, with context, usage and tool panels on the left and agent details on the right" width="100%" />
 </p>
 
 <p align="center">
-  <sub>The <b>Chat</b> view — live plan, live todos, live tool calls, live synthesis.</sub>
+  <sub>The <b>Chat</b> view: the transcript in the middle, with context, usage and agent details alongside.</sub>
 </p>
 
 > **See the system, not just the file.**
