@@ -2,7 +2,7 @@ import type { RGBA } from "@opentui/core"
 import type { SessionMessageInfo } from "@opencode/client"
 import { createSignal, type Accessor } from "solid-js"
 import type { RosterRow } from "../../data/understory"
-import type { AgentSpan } from "../../data/understory-spans"
+import type { AgentSpan, SessionData } from "../../data/understory-spans"
 import type { Palette } from "../../theme"
 import {
   followWindow,
@@ -56,6 +56,8 @@ export interface LensProps {
   /** Spans per session, oldest first, for the time T the lens draws. */
   readonly spans: ReadonlyMap<string, readonly AgentSpan[]>
   readonly messages: (sessionID: string) => readonly SessionMessageInfo[]
+  /** The memoised per-session derivation, so a lens can reuse its buckets. */
+  readonly session?: ((sessionID: string) => SessionData) | undefined
   readonly hues: ReadonlyMap<string, RGBA>
   readonly theme: Palette
   readonly view: UnderstoryView
@@ -65,8 +67,20 @@ export interface LensProps {
   /** Rows the lens has, including the overview and ruler it shares with the roster. */
   readonly geometry: RowGeometry
   readonly animations: boolean
-  readonly tick: number
+  /**
+   * The animation clock: an accessor so a lens that draws no animated cell never
+   * reads it, and a tick cannot redraw a still frame. A plain number is accepted
+   * for a test or a one-shot render.
+   */
+  readonly tick: TickInput
   readonly on: LensCallbacks
+}
+
+/** The animation clock as a value, for a draw function. */
+export type TickInput = Accessor<number> | number
+
+export function readTick(tick: TickInput): number {
+  return typeof tick === "function" ? tick() : tick
 }
 
 export interface WindowInput {

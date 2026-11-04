@@ -35,8 +35,18 @@ export const SUB = 8
 /** Tokens per second that fills the token bar rows; larger rates rescale. */
 export const RATE_TOP = 170
 
-export interface TraceLayout {
-  /** First history column. */
+/**
+ * The lane painter's scratch column array: one lane is painted at a time, so
+ * the array is reused instead of allocated per lane per frame.
+ */
+let laneScratch: Array<RGBA | undefined> = []
+function lanePaint(size: number): Array<RGBA | undefined> {
+  if (laneScratch.length < size) laneScratch = new Array<RGBA | undefined>(size)
+  laneScratch.fill(undefined, 0, size)
+  return laneScratch
+}
+
+export interface TraceLayout {  /** First history column. */
   readonly x: number
   /** Usable columns between the two blank edge columns. */
   readonly inner: number
@@ -111,7 +121,7 @@ export function drawOverview(grid: Grid, input: OverviewInput): void {
   if (width <= 0 || rows <= 0) return
   const ground = theme.background
   const span = Math.max(1, input.to - input.from)
-  const layers: Array<Array<{ color: RGBA; agent: number; lo: number; hi: number }> | undefined> = []
+  const layers: Array<Array<{ index: number; lo: number; hi: number }> | undefined> = []
   let peak = 0
 
   for (let c = 0; c < width; c += 1) {
@@ -122,16 +132,24 @@ export function drawOverview(grid: Grid, input: OverviewInput): void {
     }
     const rates = input.rates[c] ?? []
     let total = 0
-    const stack: Array<{ color: RGBA; agent: number; lo: number; hi: number }> = []
+    const stack: Array<{ index: number; lo: number; hi: number }> = []
     rates.forEach((rate, agent) => {
-      const color = input.colors[agent]
-      if (rate <= 0 || color === undefined) return
-      stack.push({ color, agent, lo: total, hi: total + rate })
+      if (rate <= 0 || input.colors[agent] === undefined) return
+      stack.push({ index: agent, lo: total, hi: total + rate })
       total += rate
     })
     if (total > peak) peak = total
     layers.push(stack)
   }
+
+  // Two colours per agent for the whole frame: its in-window colour (full for
+  // the selected row, three-fifths blended for the rest) and the dimmed blend
+  // for the part outside the visible window. Hoisting them turns one `mix` pair
+  // per cell into one per agent.
+  const inside = input.colors.map((color, agent) =>
+    agent === input.selected ? color : mix(ground, color, 0.62),
+  )
+  const outside = inside.map((color) => mix(ground, color, 0.38))
 
   const scale = (rows * SUB) / Math.max(1, peak)
   const start = Math.round(((input.window.a - input.from) / span) * (width - 1))
@@ -143,10 +161,7 @@ export function drawOverview(grid: Grid, input: OverviewInput): void {
     for (let row = 0; row < rows; row += 1) grid.setCell(x + c, y + row, " ", theme.text, ground)
     const stack = layers[c]
     if (stack === undefined || stack.length === 0) continue
-    const inside = c >= start && c <= end
-    const shade = inside ? 1 : 0.38
-    const paint = (color: RGBA, selected: boolean) =>
-      mix(ground, mix(ground, color, selected ? 1 : 0.62), shade)
+    const inWindow = c >= start && c <= end
 
     for (let row = 0; row < rows; row += 1) {
       const lo = row * SUB
@@ -157,8 +172,8 @@ export function drawOverview(grid: Grid, input: OverviewInput): void {
       const next = stack[stack.indexOf(first) + 1]
       const top = Math.min(first.hi * scale, hi)
       const eighths = Math.max(0, Math.min(SUB, Math.round(top - lo)))
-      const fg = paint(first.color, first.agent === input.selected)
-      const bg = next === undefined ? ground : paint(next.color, next.agent === input.selected)
+      const fg = inWindow ? inside[first.index]! : outside[first.index]!
+      const bg = next === undefined ? ground : inWindow ? inside[next.index]! : outside[next.index]!
       if (eighths >= SUB && next === undefined) grid.setCell(x + c, rowY, "█", fg, ground)
       else grid.lowerBlock(x + c, rowY, eighths, fg, bg)
     }
@@ -167,10 +182,8 @@ export function drawOverview(grid: Grid, input: OverviewInput): void {
   if (dimmed) {
     for (let row = 0; row < rows; row += 1) {
       const y0 = y + row
-      const left = grid.cell(x + start, y0)
-      if (start > 0 && left !== undefined && left.glyph === " ") grid.setCell(x + start, y0, "▏", edges)
-      const right = grid.cell(x + end, y0)
-      if (end < width - 1 && right !== undefined && right.glyph === " ") grid.setCell(x + end, y0, "▕", edges)
+      if (start > 0 && grid.glyphAt(x + start, y0) === " ") grid.setCell(x + start, y0, "▏", edges)
+      if (end < width - 1 && grid.glyphAt(x + end, y0) === " ") grid.setCell(x + end, y0, "▕", edges)
     }
   }
 
@@ -236,8 +249,7 @@ export function drawTickLines(grid: Grid, input: {
     const c = Math.round(column(input.window, input.layout.history, t))
     if (c < 0 || c >= input.layout.history) continue
     for (let y = input.top; y < input.top + input.height; y += 1) {
-      const cell = grid.cell(input.layout.x + c, y)
-      if (cell !== undefined && cell.glyph === " ") grid.setCell(input.layout.x + c, y, "┊", input.theme.border)
+      if (grid.glyphAt(input.layout.x + c, y) === " ") grid.setCell(input.layout.x + c, y, "┊", input.theme.border)
     }
   }
 }
@@ -261,6 +273,8 @@ export interface LaneInput {
   readonly row: RosterRow
   readonly spans: readonly AgentSpan[]
   readonly messages: readonly SessionMessageInfo[]
+  /** The memoised session, so its token buckets are cached across frames. */
+  readonly bucketOwner?: object | undefined
   /** Lane top row in the grid. */
   readonly y: number
   readonly height: number
@@ -307,14 +321,17 @@ export function drawLane(grid: Grid, input: LaneInput): void {
   grid.hit(layout.x, y, layout.inner, height, `trace:lane:${row.sessionID}`)
 
   if (band.bars > 0) {
-    const buckets = tokenBuckets(spans, input.messages, window.a, window.b, width)
+    const buckets = tokenBuckets(spans, input.messages, window.a, window.b, width, input.bucketOwner)
     const peak = buckets.reduce((top, bucket) => Math.max(top, bucket.rate), 0)
     const scale = Math.max(RATE_TOP, peak)
+    // Two colours per lane, not one per column: the bar count per column varies.
+    const ahead = mix(rowBg, input.hue, 0.25)
+    const behind = input.selected ? input.hue : mix(rowBg, input.hue, 0.72)
     for (let c = 0; c < width; c += 1) {
       const rate = buckets[c]?.rate ?? 0
       if (rate <= 0) continue
       const t = window.a + ((c + 0.5) / width) * spanMs
-      const color = t > at ? mix(rowBg, input.hue, 0.25) : input.selected ? input.hue : mix(rowBg, input.hue, 0.72)
+      const color = t > at ? ahead : behind
       let level = Math.round(Math.min(1, rate / scale) * SUB * band.bars)
       for (let step = 0; step < band.bars && level > 0; step += 1) {
         const filled = Math.min(SUB, level)
@@ -324,7 +341,7 @@ export function drawLane(grid: Grid, input: LaneInput): void {
     }
   }
 
-  const paint = new Array<RGBA | undefined>(width * SUB).fill(undefined)
+  const paint = lanePaint(width * SUB)
   const sub = width * SUB
   for (const span of spans) {
     const tinted = span.kind === "think" || span.kind === "write"
@@ -393,8 +410,7 @@ export function drawLane(grid: Grid, input: LaneInput): void {
     const c1 = Math.floor(pix(end))
     if (span.kind === "wait") {
       for (let c = Math.max(0, c0); c < Math.min(width, c1); c += 1) {
-        const cell = grid.cell(layout.x + c, blockY)
-        if (cell !== undefined && cell.glyph === " ") grid.setCell(layout.x + c, blockY, "╌", theme.wood)
+        if (grid.glyphAt(layout.x + c, blockY) === " ") grid.setCell(layout.x + c, blockY, "╌", theme.wood)
       }
       continue
     }
@@ -581,11 +597,9 @@ export function drawSpawnLinks(grid: Grid, input: LinkInput): void {
     if (c < 0 || c >= input.layout.history) continue
     const color = child.row.sessionID === input.selected ? input.theme.leaf : input.theme.wood
     for (let y = parent.block + 1; y < child.block; y += 1) {
-      const cell = grid.cell(input.layout.x + c, y)
-      if (cell !== undefined && cell.glyph === " ") grid.setCell(input.layout.x + c, y, "│", color)
+      if (grid.glyphAt(input.layout.x + c, y) === " ") grid.setCell(input.layout.x + c, y, "│", color)
     }
-    const foot = grid.cell(input.layout.x + c, child.block)
-    if (foot !== undefined && foot.glyph === " ") grid.setCell(input.layout.x + c, child.block, "╰", color)
+    if (grid.glyphAt(input.layout.x + c, child.block) === " ") grid.setCell(input.layout.x + c, child.block, "╰", color)
   }
 }
 
@@ -608,11 +622,14 @@ export function drawNowLine(grid: Grid, input: NowLineInput): void {
   const c = Math.max(0, Math.min(input.layout.history - 1, Math.round(column(input.window, input.layout.history, input.playhead))))
   const color = input.replay ? input.theme.sky : mix(input.theme.wood, input.theme.lime, 0.55)
   for (let y = input.top; y < input.top + input.height; y += 1) {
-    const cell = grid.cell(input.layout.x + c, y)
-    if (cell === undefined) continue
-    const blank = cell.glyph === " " || cell.glyph === "┊" || cell.glyph === "│"
+    const glyph = grid.glyphAt(input.layout.x + c, y)
+    if (glyph === undefined) continue
+    const blank = glyph === " " || glyph === "┊" || glyph === "│"
     if (blank) grid.setCell(input.layout.x + c, y, "│", color)
-    else grid.setCell(input.layout.x + c, y, cell.glyph, cell.fg, mix(cell.bg, color, 0.25))
+    else {
+      const cell = grid.cell(input.layout.x + c, y)!
+      grid.setCell(input.layout.x + c, y, glyph, cell.fg, mix(cell.bg, color, 0.25))
+    }
   }
 }
 

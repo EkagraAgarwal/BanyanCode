@@ -2,7 +2,7 @@ import type { Context } from "@opencode/plugin/tui/context"
 import type { SessionMessageInfo } from "@opencode/client"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { createEffect, createMemo, createSignal, onCleanup, onMount, Show, untrack } from "solid-js"
+import { createEffect, createMemo, createRoot, createSignal, onCleanup, onMount, Show, untrack, type Accessor } from "solid-js"
 import type { CodegraphLive, MeshLive } from "../../data/live"
 import { setAgentsStatus, type AgentsStatus } from "../../data/agents-status"
 import { canSteer, pendingCount } from "../../data/mesh"
@@ -18,13 +18,15 @@ import {
   type RunSheet,
 } from "../../data/understory"
 import {
-  agentSpans,
   messagesAt,
   rowAt,
+  sessionData,
   sparkValues,
-  staleEdits,
+  spansFor,
+  staleEditsFrom,
   tokenRate,
   type AgentSpan,
+  type SessionData,
   type StaleEdit,
 } from "../../data/understory-spans"
 import { createTicker, ease, spring, useTickerWhen, type Ticker } from "../../motion"
@@ -105,6 +107,33 @@ export function Understory(props: {
   const messagesOf = (sessionID: string): readonly SessionMessageInfo[] =>
     props.context.data.session.message.list(sessionID)
 
+  /**
+   * One session's derived data, memoised on that session alone. The store hands
+   * out a stable array per session and Solid tracks the reads inside it, so a
+   * streamed part re-derives one branch and leaves the other nineteen alone.
+   * Every read of a session's messages goes through here.
+   */
+  const sessionMemos = new Map<string, Accessor<SessionData>>()
+  const disposals: Array<() => void> = []
+  onCleanup(() => {
+    for (const dispose of disposals) dispose()
+    disposals.length = 0
+    sessionMemos.clear()
+  })
+  const sessionOf = (sessionID: string): SessionData => {
+    const found = sessionMemos.get(sessionID)
+    if (found !== undefined) return found()
+    let accessor: Accessor<SessionData> | undefined
+    createRoot((dispose) => {
+      disposals.push(dispose)
+      accessor = createMemo(() =>
+        sessionData(sessionID, messagesOf(sessionID), { root: sessionID === root() }),
+      )
+    })
+    sessionMemos.set(sessionID, accessor!)
+    return accessor!()
+  }
+
   const rows = createMemo(() =>
     rosterRows({
       root: root(),
@@ -113,7 +142,7 @@ export function Understory(props: {
       killed: props.mesh.killed(),
       pending: (sessionID) => pendingCount(props.context, sessionID),
       status: (sessionID) => props.context.data.session.status(sessionID),
-      messages: messagesOf,
+      flags: (sessionID) => sessionOf(sessionID).flags,
       more: (sessionID) => props.context.data.session.message.more?.(sessionID),
     }),
   )
@@ -180,7 +209,7 @@ export function Understory(props: {
       const ask = row.state === "waiting" ? askOf(row.sessionID) : undefined
       map.set(
         row.sessionID,
-        agentSpans(messagesOf(row.sessionID), {
+        spansFor(sessionOf(row.sessionID), {
           state: row.state,
           start: row.startedAt,
           ...(ask === undefined ? {} : { ask }),
@@ -200,7 +229,9 @@ export function Understory(props: {
     if (view.live()) return rows()
     const spans = spansBySession()
     const time = at()
-    return rows().map((row) => rowAt(row, spans.get(row.sessionID) ?? [], messagesOf(row.sessionID), time))
+    return rows().map((row) =>
+      rowAt(row, spans.get(row.sessionID) ?? [], sessionOf(row.sessionID).messages, time),
+    )
   })
 
   /**
@@ -233,26 +264,49 @@ export function Understory(props: {
   const hueOf = (sessionID: string | undefined): ReturnType<typeof branchHue> =>
     (sessionID === undefined ? undefined : hues().get(sessionID)) ?? theme().leaf
 
-  /** Tokens per second one session streamed up to the playhead; zero with no signal. */
-  const rateOf = (sessionID: string): number => {
-    tick()
-    return tokenRate(messagesAt(messagesOf(sessionID), at()), { to: at() })
-  }
+  /**
+   * The clock the rate and the sparkline are measured at. It moves on the
+   * second (and on any data change through `rows`), never on the 12 fps tick: a
+   * tokens-per-second readout does not need twelve samples a second, and
+   * re-deriving every session's buckets at that rate was the tab's worst cost.
+   */
+  const rateClock = createMemo(() => (view.live() ? clockSecond() * 1000 : at()))
+
+  /** Tokens per second each session streamed in its last ten seconds. */
+  const rates = createMemo((): ReadonlyMap<string, number> => {
+    const to = rateClock()
+    const map = new Map<string, number>()
+    for (const row of rows()) map.set(row.sessionID, tokenRate(sessionOf(row.sessionID).messages, { to }))
+    return map
+  })
+
+  /** Sparkline steps per session, oldest first, ending at the rate clock. */
+  const sparks = createMemo((): ReadonlyMap<string, readonly number[]> => {
+    const to = rateClock()
+    const map = new Map<string, readonly number[]>()
+    for (const row of rows()) {
+      const data = sessionOf(row.sessionID)
+      map.set(row.sessionID, sparkValues(messagesAt(data.messages, to), { to, columns: 14 }))
+    }
+    return map
+  })
+
+  const rateOf = (sessionID: string): number => rates().get(sessionID) ?? 0
 
   /** Sparkline steps for one roster row, oldest first, ending at the playhead. */
-  const sparkFor = (row: RosterRow): readonly number[] => {
-    tick()
-    return sparkValues(messagesAt(messagesOf(row.sessionID), at()), { to: at(), columns: 14 })
-  }
+  const sparkFor = (row: RosterRow): readonly number[] => sparks().get(row.sessionID) ?? []
 
   /** The advisory stale-read check across every branch, as far as the playhead reached. */
-  const stale = createMemo((): readonly StaleEdit[] =>
-    staleEdits(
-      rows().map((row) => ({ sessionID: row.sessionID, label: row.label, messages: messagesOf(row.sessionID) })),
+  const stale = createMemo((): readonly StaleEdit[] => {
+    const list = rows()
+    const labels = new Map(list.map((row) => [row.sessionID, row.label]))
+    return staleEditsFrom(
+      list.map((row) => sessionOf(row.sessionID).touches),
+      labels,
       20,
       horizon(),
-    ),
-  )
+    )
+  })
 
   /** The code graph, when the host has loaded one; absent means "not built". */
   const graph = createMemo((): GraphData | undefined => {
@@ -345,12 +399,13 @@ export function Understory(props: {
 
   /** The run bounds the time window is clamped to from the shell's keys. */
   const traceBounds = () => {
-    const rootRow = rows().find((row) => row.depth === 0)
-    const start = Math.max(0, rootRow?.startedAt ?? rows()[0]?.startedAt ?? 0)
+    const list = rows()
+    const rootRow = list.find((row) => row.depth === 0)
+    const start = Math.max(0, rootRow?.startedAt ?? list[0]?.startedAt ?? 0)
     let newest = start
-    for (const row of rows()) {
-      newest = Math.max(newest, row.startedAt, row.endedAt ?? 0, newestMessageAt(messagesOf(row.sessionID)))
-      for (const span of spansBySession().get(row.sessionID) ?? []) newest = Math.max(newest, span.t0, span.t1 ?? 0)
+    for (const row of list) {
+      const data = sessionOf(row.sessionID)
+      newest = Math.max(newest, row.startedAt, row.endedAt ?? 0, data.newestAt, data.spanEnd)
     }
     return { start, newest }
   }
@@ -517,7 +572,11 @@ export function Understory(props: {
   usePanelScroll(props.context, () => streamScroll, 6)
 
   /** Messages a sheet may read: only what had arrived by the playhead. */
-  const sheetMessages = (sessionID: string): readonly SessionMessageInfo[] => messagesAt(messagesOf(sessionID), at())
+  const sheetMessages = (sessionID: string): readonly SessionMessageInfo[] => {
+    const data = sessionOf(sessionID)
+    const cut = horizon()
+    return Number.isFinite(cut) ? messagesAt(data.messages, cut) : data.messages
+  }
 
   const run = createMemo((): RunSheet | undefined =>
     runSheet({
@@ -525,6 +584,7 @@ export function Understory(props: {
       root: root(),
       selected: selectedID(),
       messages: sheetMessages,
+      returned: (sessionID) => sessionOf(sessionID).returned,
     }),
   )
   const sheet = createMemo((): AgentSheet | undefined =>
@@ -673,7 +733,38 @@ export function Understory(props: {
   const overlayVisible = (): boolean =>
     view.overlay() || (overlayMotion()?.open === false && overlayValue() < 1)
 
-  const tick = useTickerWhen(ticker, () => rows().some((row) => isLiveState(row.state)) || overlayAnimating())
+  /**
+   * The tab animates only what is actually moving: a running row's spinner and
+   * its lane shimmer, a waiting row's breath, and an overlay spring. A `blocked`
+   * row is a static glyph, so a run parked on branches keeps no timer at all —
+   * that was 68 % of a core with zero bytes of output.
+   */
+  const pulse = () =>
+    animations() && rows().some((row) => row.state === "running" || row.state === "waiting")
+  const animating = () => pulse() || overlayAnimating()
+  const tick = useTickerWhen(ticker, animating)
+
+  // The run clock and the rate readout move on the second, whether or not
+  // anything animates. The ticker advances it while it runs; this timer covers
+  // the case where nothing is moving and the ticker is stopped, so a live run's
+  // clock never freezes. With animations off no timer runs at all.
+  createEffect(() => {
+    const live = rows().some((row) => isLiveState(row.state))
+    if (!animations() || !live) return
+    let handle: ReturnType<typeof timers.setTimeout> | undefined
+    const step = () => {
+      const next = Math.floor(now() / 1000)
+      if (next !== lastClockSecond) {
+        lastClockSecond = next
+        setClockSecond(next)
+      }
+      handle = timers.setTimeout(step, 1000 - (now() % 1000) + 5)
+    }
+    handle = timers.setTimeout(step, 1000 - (now() % 1000) + 5)
+    onCleanup(() => {
+      if (handle !== undefined) timers.clearTimeout(handle)
+    })
+  })
 
   // Quantise the ticker to whole seconds for the clock and the now line. The
   // signal changes once per second, so no lane repaints on the frames between.
@@ -706,19 +797,21 @@ export function Understory(props: {
   onCleanup(() => props.context.ui.composer.setPlaceholder(undefined))
 
   const runElapsed = createMemo(() => {
-    tick()
     const rootRow = rows().find((row) => row.depth === 0)
     if (rootRow === undefined) return "0:00"
     // The stream can outlive the root's own turn (a child message lands after
     // the root went idle). RUN must never be shorter than the newest event it
     // contains; an ended run then shows that final duration. Replaying shows
-    // the playhead instead, so the clock reads the scrubbed time.
-    const end = view.live() ? Math.max(rootRow.endedAt ?? now(), newestEventAt()) : view.viewT()
+    // the playhead instead, so the clock reads the scrubbed time. Live is
+    // coarse (one step per second): the clock is not a lane.
+    const end = view.live() ? Math.max(rootRow.endedAt ?? clockSecond() * 1000, newestEventAt()) : view.viewT()
     return runClock(Math.max(0, end - rootRow.startedAt))
   })
 
   function newestEventAt(): number {
-    return rows().reduce((newest, row) => Math.max(newest, newestMessageAt(messagesOf(row.sessionID))), 0)
+    let newest = 0
+    for (const row of rows()) newest = Math.max(newest, sessionOf(row.sessionID).newestAt)
+    return newest
   }
 
   const runClockText = createMemo(() => {
@@ -731,13 +824,13 @@ export function Understory(props: {
 
   /** Everything the roster header reports about the run, as of the playhead. */
   const summary = createMemo(() => {
-    tick()
     const list = displayRows()
+    const clock = runElapsed()
     const tokens = list.reduce((total, row) => total + row.tokens, 0)
     const cost = list.reduce((total, row) => total + row.cost, 0)
     const limit = props.mesh.limits()?.maxSubagents
     return {
-      clock: runElapsed(),
+      clock,
       state: runStateLabel(list),
       stateColor: runStateColor(list, theme()),
       tokens,
@@ -868,7 +961,8 @@ export function Understory(props: {
     offset: rosterOffset(),
     ask: askOf,
     spans: spansBySession(),
-    messages: messagesOf,
+    messages: (sessionID: string) => sessionOf(sessionID).messages,
+    session: sessionOf,
     hues: hues(),
     theme: theme(),
     view,
@@ -877,7 +971,7 @@ export function Understory(props: {
     height: lensHeight(),
     geometry: geometry(),
     animations: animations(),
-    tick: tick(),
+    tick,
     on: { selectAgent: select, pinCall: view.pinCall, selectFile: view.selectFile },
   })
 
@@ -955,7 +1049,7 @@ export function Understory(props: {
           width={cols().roster}
           height={height()}
           animations={animations()}
-          live={view.live() && rows().some((row) => isLiveState(row.state))}
+          live={view.live() && pulse()}
           tick={tick()}
           at={at}
           summary={summary()}
@@ -1060,9 +1154,4 @@ export function Understory(props: {
       </box>
     </box>
   )
-}
-
-/** The newest message any loaded session has, so RUN never shrinks below its own stream. */
-function newestMessageAt(messages: readonly SessionMessageInfo[]): number {
-  return messages.reduce((newest, message) => Math.max(newest, message.time.created), 0)
 }

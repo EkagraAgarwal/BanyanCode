@@ -1,16 +1,15 @@
 import type { RGBA, ScrollBoxRenderable } from "@opentui/core"
 import { createMemo, createSignal, For, Show } from "solid-js"
 import { truncate } from "../../data/format"
-import { returnedSummary } from "../../data/messages"
 import { isLiveState, shortLabel, streamEntries, type StreamEntry, type StreamSession } from "../../data/understory"
-import { durationText } from "../../data/understory-spans"
+import { durationText, sessionData } from "../../data/understory-spans"
 import type { Palette } from "../../theme"
 import { mix } from "../../motion"
 import { sproutFrame } from "../status/sprout"
 import { CellGrid } from "./cells"
 import { spans, streamClock, type Span } from "./layout"
 import { LineView, type Line } from "./line"
-import type { LensProps } from "./view"
+import { readTick, type LensProps } from "./view"
 
 /** The merged, time-ordered log: one row per event, newest at the bottom. */
 export interface StreamLensProps extends LensProps {
@@ -25,15 +24,14 @@ export interface StreamLensProps extends LensProps {
 export function StreamLens(props: StreamLensProps) {
   const sessions = createMemo((): readonly StreamSession[] =>
     props.rows.map((row) => {
-      const messages = props.messages(row.sessionID)
-      const returned = returnedSummary(messages, 120)
+      const data = props.session?.(row.sessionID) ?? sessionData(row.sessionID, props.messages(row.sessionID))
       return {
         sessionID: row.sessionID,
         label: row.label,
         state: row.state,
-        messages,
+        messages: data.messages,
         ...(row.endedAt === undefined ? {} : { endedAt: row.endedAt }),
-        ...(returned === undefined ? {} : { returned }),
+        ...(data.returned === undefined ? {} : { returned: data.returned }),
       }
     }),
   )
@@ -64,7 +62,7 @@ export function StreamLens(props: StreamLensProps) {
       hues={props.hues}
       theme={props.theme}
       animations={props.animations}
-      time={props.tick}
+      time={readTick(props.tick)}
       truncated={truncated()}
       origin={origin()}
       filterLabel={props.view.filter() ? `${selectedRow()?.label ?? ""} only` : "All branches"}
@@ -98,6 +96,8 @@ function StreamView(props: {
 }) {
   let scroll: ScrollBoxRenderable | undefined
   const [hover, setHover] = createSignal<string>()
+  /** One built line per entry; a tick that changes no glyph reuses it. */
+  const lineCache = new WeakMap<StreamEntry, Map<string, Line>>()
   const inner = () => Math.max(0, props.width - 1)
   const area = () => Math.max(0, props.height - 1)
   const total = () => props.entries.length
@@ -106,15 +106,31 @@ function StreamView(props: {
     return Math.max(0, Math.min(props.top, Math.max(0, total() - area())))
   }
   const slice = () => props.entries.slice(start(), start() + area())
-  const spinner = () => (props.animations ? sproutFrame(props.time) : "?")
   const timeWidth = () => (inner() >= 60 ? 7 : 0)
   const tagWidth = () => Math.min(11, Math.max(6, Math.floor(inner() * 0.14)))
   const bodyWidth = () => Math.max(1, inner() - timeWidth() - tagWidth() - 1)
 
   const lineFor = (entry: StreamEntry, newest: boolean): Line => {
+    const spinner = entry.detail?.open === true ? (props.animations ? sproutFrame(props.time) : "?") : ""
+    const key = `${inner()}|${newest ? 1 : 0}|${spinner}`
+    const cached = lineCache.get(entry)
+    const hit = cached?.get(key)
+    if (hit !== undefined) return hit
+    const line = buildLine(entry, newest, spinner)
+    if (cached === undefined) {
+      lineCache.set(entry, new Map([[key, line]]))
+      return line
+    }
+    // An open call's spinner makes one entry per frame; keep the map small.
+    if (cached.size > 24) cached.clear()
+    cached.set(key, line)
+    return line
+  }
+
+  const buildLine = (entry: StreamEntry, newest: boolean, spinner: string): Line => {
     const tag = shortLabel(entry.label, tagWidth())
     const failed = entry.kind === "fail" || entry.detail?.error === true
-    const prefix = streamPrefix(entry, props.animations, spinner())
+    const prefix = streamPrefix(entry, props.animations, spinner)
     // A finished call carries its own timing, and an edit its diff, exactly as
     // the mockup's rows read: `✓ edit updater.ts +8 −2  3.1s`.
     const detail = entry.detail
@@ -259,22 +275,39 @@ function StreamView(props: {
 /** Characters of the newest text that carry the bloom. */
 export const BLOOM_CHARS = 12
 
+const bloomRamps = new WeakMap<object, Span[]>()
+
+/**
+ * The bloom ramp: one span per trailing character, blended from the highlight
+ * into the text colour. The ramp depends only on the theme, so it is built once
+ * per palette and reused by every line that blooms.
+ */
+function bloomRamp(theme: Palette): Span[] {
+  const cached = bloomRamps.get(theme)
+  if (cached !== undefined) return cached
+  const ramp = Array.from({ length: BLOOM_CHARS }, (_, index) => ({
+    text: "",
+    color: mix(theme.highlight, theme.text, (index + 1) / BLOOM_CHARS),
+  }))
+  bloomRamps.set(theme, ramp)
+  return ramp
+}
+
 /**
  * The token bloom: the newest characters of the newest line blend from the
- * highlight colour into the text colour. Pure, so the stream can call it per
- * frame and a test can check the ramp without a renderer.
+ * highlight colour into the text colour. Pure, so the stream can check the ramp
+ * without a renderer.
  */
 export function bloomSpans(text: string, theme: Palette): Span[] {
   const glyphs = [...text]
-  const head = glyphs.slice(0, Math.max(0, glyphs.length - BLOOM_CHARS)).join("")
+  if (glyphs.length === 0) return []
   const tail = glyphs.slice(-BLOOM_CHARS)
-  if (tail.length === 0) return []
+  const head = glyphs.length > tail.length ? glyphs.slice(0, glyphs.length - tail.length).join("") : ""
+  const ramp = bloomRamp(theme)
+  const offset = BLOOM_CHARS - tail.length
   return [
     ...(head === "" ? [] : [{ text: head, color: theme.text }]),
-    ...tail.map((glyph, index) => ({
-      text: glyph,
-      color: mix(theme.highlight, theme.text, (index + 1) / tail.length),
-    })),
+    ...tail.map((glyph, index) => ({ text: glyph, color: ramp[offset + index]!.color })),
   ]
 }
 

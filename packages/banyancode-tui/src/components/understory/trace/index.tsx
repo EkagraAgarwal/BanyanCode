@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { createEffect, createMemo } from "solid-js"
 import { isLiveState } from "../../../data/understory"
+import type { RosterRow } from "../../../data/understory"
 import { messagesAt, tokenBuckets } from "../../../data/understory-spans"
 import { CellGrid, type Grid, type GridPointer } from "../cells"
 import { HISTORY_LOAD_FRACTION, rosterWindow, TRACE_SECONDS_PER_COLUMN, WHEEL_FRACTION } from "../layout"
@@ -17,6 +18,7 @@ import {
   laneRows,
   traceLayout,
 } from "./draw"
+import { readTick } from "../view"
 
 /** A double click inside the overview resets the zoom, like the mockup. */
 const DOUBLE_CLICK_MS = 400
@@ -58,11 +60,17 @@ export function TraceLens(props: TraceLensProps) {
   /**
    * The newest event any loaded lane has. This is data only: a span starting
    * or ending, a message appearing or completing. It never reads the clock, so
-   * the window cannot drift while nothing happens.
+   * the window cannot drift while nothing happens. The per-session derivation
+   * already carries both numbers, so this reads one value per row.
    */
   const lastEvent = createMemo(() => {
     let last = origin()
     for (const row of props.rows) {
+      const data = props.session?.(row.sessionID)
+      if (data !== undefined) {
+        last = Math.max(last, row.startedAt, row.endedAt ?? 0, data.newestAt, data.completedAt, data.spanEnd)
+        continue
+      }
       last = Math.max(last, row.startedAt, row.endedAt ?? 0)
       for (const span of props.spans.get(row.sessionID) ?? []) last = Math.max(last, span.t0, span.t1 ?? 0)
       for (const message of props.messages(row.sessionID)) {
@@ -114,27 +122,27 @@ export function TraceLens(props: TraceLensProps) {
   const overviewEnd = () => {
     const end = ended()
     if (end !== undefined) return end
-    return Math.max(origin() + 1, playhead(), horizonEvent())
+    // The strip is a whole-run summary; quantising its right edge to the second
+    // keeps it off every event, so one streamed part does not rebuild twenty
+    // sessions' overview series.
+    return Math.max(origin() + 1, Math.ceil(Math.max(playhead(), horizonEvent()) / 1000) * 1000)
   }
 
   const laneTop = () => props.geometry.overview + props.geometry.ruler
 
   /** Live branches under one agent, at any depth: what a blocked row is waiting on. */
-  const waitingBelow = (sessionID: string): number => {
-    const byID = new Map(rows().map((row) => [row.sessionID, row]))
-    let count = 0
-    for (const row of rows()) {
+  const waitingCounts = (list: readonly RosterRow[]): ReadonlyMap<string, number> => {
+    const byID = new Map(list.map((row) => [row.sessionID, row]))
+    const counts = new Map<string, number>()
+    for (const row of list) {
       if (!isLiveState(row.state)) continue
       let parent = row.parentID
       while (parent !== undefined) {
-        if (parent === sessionID) {
-          count += 1
-          break
-        }
+        counts.set(parent, (counts.get(parent) ?? 0) + 1)
         parent = byID.get(parent)?.parentID
       }
     }
-    return count
+    return counts
   }
 
   const windowed = () => {
@@ -340,15 +348,20 @@ export function TraceLens(props: TraceLensProps) {
     const from = origin()
     const geometry = props.geometry
     const top = laneTop()
-    // The grid animates only when animations are on; otherwise a ticker frame
-    // must not repaint the lanes.
-    const tick = props.animations ? props.tick : 0
     const newest = lastEvent()
     const { per, range } = windowed()
     const list = rows().slice(range.offset, range.offset + range.count)
+    // The grid animates only when animations are on and something in it can
+    // move (a running lane's shimmer, a waiting lane's breath). Otherwise a
+    // ticker frame must not repaint the lens at all, so the tick is not read.
+    const animated = props.animations && list.some((row) => row.state === "running" || row.state === "waiting")
+    const tick = animated ? readTick(props.tick) : 0
 
     if (geometry.overview > 0) {
       const to = overviewEnd()
+      // The overview spans the whole run; a lane spans the visible window. Both
+      // go through the same per-session memo, so a run that fits its window (the
+      // common ended case) builds one set of buckets and both readers reuse it.
       const series = props.rows.map((row) =>
         tokenBuckets(
           props.spans.get(row.sessionID) ?? [],
@@ -356,6 +369,7 @@ export function TraceLens(props: TraceLensProps) {
           from,
           to,
           out.history,
+          props.session?.(row.sessionID),
         ).map((bucket) => bucket.rate),
       )
       const rates = Array.from({ length: out.history }, (_, column) => series.map((list) => list[column] ?? 0))
@@ -400,12 +414,14 @@ export function TraceLens(props: TraceLensProps) {
       const laneY = top + index * per
       return { row, top: laneY, block: laneY + laneRows(per).block }
     })
+    const below = waitingCounts(list)
+    const pinned = props.view.pinned()
     positions.forEach((entry) => {
-      const pinned = props.view.pinned()
       drawLane(grid, {
         row: entry.row,
         spans: props.spans.get(entry.row.sessionID) ?? [],
         messages: messagesAt(props.messages(entry.row.sessionID), cut()),
+        bucketOwner: props.session?.(entry.row.sessionID),
         y: entry.top,
         height: per,
         layout: out,
@@ -421,7 +437,7 @@ export function TraceLens(props: TraceLensProps) {
         live: live(),
         pinned: pinned?.sessionID === entry.row.sessionID ? pinned.spanID : undefined,
         askText: props.ask?.(entry.row.sessionID),
-        waitingOn: waitingBelow(entry.row.sessionID),
+        waitingOn: below.get(entry.row.sessionID) ?? 0,
       })
     })
 

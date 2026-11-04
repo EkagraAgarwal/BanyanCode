@@ -11,9 +11,9 @@ import {
   stalePaths,
   touchIndex,
 } from "../../../data/understory-map"
-import { staleEdits } from "../../../data/understory-spans"
+import { sessionTouches, staleEditsFrom } from "../../../data/understory-spans"
 import { CellGrid, type Grid } from "../cells"
-import type { LensProps } from "../view"
+import { readTick, type LensProps } from "../view"
 import { drawRoots, type RootsFrame } from "./draw"
 
 /**
@@ -41,6 +41,9 @@ export interface RootsLensProps extends LensProps {
 
 const normalize = (path: string, root: string | undefined): string => normalizeRepoPath(path, root)
 
+/** Heat and ripple read a quarter-second clock; the drawing need not be finer. */
+const ROOTS_CLOCK_MS = 250
+
 export function RootsLens(props: RootsLensProps) {
   onMount(() => {
     void props.codegraph?.ensureGraph()
@@ -54,7 +57,7 @@ export function RootsLens(props: RootsLensProps) {
   createEffect(
     on(
       () => [props.view.blast(), props.view.file()] as const,
-      ([enabled]) => setBlastStart(enabled ? untrack(() => props.tick) : undefined),
+      ([enabled]) => setBlastStart(enabled ? untrack(() => readTick(props.tick)) : undefined),
     ),
   )
 
@@ -80,11 +83,17 @@ export function RootsLens(props: RootsLensProps) {
   const touches = createMemo(() => fileTouches(props.spans, props.root, canonical()))
   const touchesByPath = createMemo(() => touchIndex(touches()))
 
-  const sessions = createMemo(() =>
-    props.rows.map((row) => ({ sessionID: row.sessionID, label: row.label, messages: props.messages(row.sessionID) })),
-  )
   /** Every alert the run raised; the playhead decides which are open. */
-  const alerts = createMemo(() => staleEdits(sessions()))
+  const alerts = createMemo(() =>
+    staleEditsFrom(
+      props.rows.map(
+        (row) =>
+          props.session?.(row.sessionID)?.touches ??
+          sessionTouches({ sessionID: row.sessionID, label: row.label, messages: props.messages(row.sessionID) }),
+      ),
+      new Map(props.rows.map((row) => [row.sessionID, row.label])),
+    ),
+  )
 
   const layout = createMemo(() => {
     const rect = mapRect(Math.max(1, props.width), Math.max(1, props.height)).rect
@@ -104,18 +113,20 @@ export function RootsLens(props: RootsLensProps) {
   }
 
   const draw = (grid: Grid) => {
-    const t = props.view.viewT()
+    // Heat, ripple and the stale window read a coarse clock: they are a slow
+    // signal, so a frame never splits a second into twelve different tints.
+    const raw = props.view.viewT()
+    const t = Math.floor(raw / ROOTS_CLOCK_MS) * ROOTS_CLOCK_MS
     const open = alerts().filter((alert) => alert.editedAt <= t)
     const started = blastStart()
-    // The tick is seconds; the frame works in milliseconds, like the spans.
-    const elapsed =
-      started === undefined
-        ? 0
-        : props.animations
-          ? props.tick > started
-            ? (props.tick - started) * 1_000
-            : Number.POSITIVE_INFINITY
-          : Number.POSITIVE_INFINITY
+    const ripple = started !== undefined && props.animations
+    // The tick is seconds; the frame works in milliseconds, like the spans. It
+    // is read only while the blast ripple is actually running.
+    const elapsed = ripple
+      ? readTick(props.tick) > started
+        ? (readTick(props.tick) - started) * 1_000
+        : Number.POSITIVE_INFINITY
+      : Number.POSITIVE_INFINITY
     const frame: RootsFrame = {
       rows: props.visible ?? props.rows,
       laneTop: Math.max(0, props.geometry.header - 1),
@@ -131,7 +142,7 @@ export function RootsLens(props: RootsLensProps) {
       blast: props.view.blast(),
       blastElapsed: elapsed,
       t,
-      tick: props.tick,
+      tick: ripple ? readTick(props.tick) : 0,
       animations: props.animations,
       model: model(),
       layout: layout(),

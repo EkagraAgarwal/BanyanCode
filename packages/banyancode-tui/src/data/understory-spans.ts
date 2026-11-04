@@ -1,11 +1,14 @@
 import type { SessionMessageAssistantTool, SessionMessageInfo } from "@opencode/client"
-import { toolArgs, totalTokens } from "./messages"
+import { returnedSummary, toolArgs, totalTokens } from "./messages"
 import {
   canonicalTool,
   diffCounts,
+  isOpenSubagentPart,
+  mayBeTruncated,
   toolKind,
   toolPath,
   type RosterRow,
+  type SessionFlags,
   type ToolLetter,
   type UnderstoryState,
 } from "./understory"
@@ -52,8 +55,17 @@ export interface SpanOptions {
   readonly limit?: number | undefined
 }
 
+const FLAT = /\s{2,}|[\n\r\t\f\v]/
+
+/**
+ * Collapse whitespace and clip to `max`. A span target is usually a short path
+ * or command with no runs of whitespace, so the regex only runs when the string
+ * actually carries something to flatten.
+ */
 const clip = (value: string, max: number): string => {
-  const flat = value.replace(/\s+/g, " ").trim()
+  const trimmed = value.trim()
+  if (trimmed.length <= max && !FLAT.test(trimmed)) return trimmed
+  const flat = trimmed.replace(/\s+/g, " ")
   return flat.length <= max ? flat : `${flat.slice(0, Math.max(0, max - 1))}…`
 }
 
@@ -94,7 +106,7 @@ function toolSpan(part: SessionMessageAssistantTool, messageID: string, sequence
   }
 }
 
-function messageSpans(message: Extract<SessionMessageInfo, { type: "assistant" }>): AgentSpan[] {
+function messageSpansOfMessage(message: Extract<SessionMessageInfo, { type: "assistant" }>): AgentSpan[] {
   const spans: AgentSpan[] = []
   const created = message.time.created
   const completed = message.time.completed
@@ -149,22 +161,34 @@ function messageSpans(message: Extract<SessionMessageInfo, { type: "assistant" }
 }
 
 /**
- * Every span a session's loaded messages describe, oldest first. Pending-ask,
- * retry and blocked spans come from the row's state, because the messages
- * themselves do not record the wait.
+ * Every span a session's loaded messages describe, oldest first, with the row's
+ * own state intentionally left out: this is the half that only changes when the
+ * messages change, so a caller can memoise it per session and add the tail per
+ * frame.
  */
-export function agentSpans(
-  messages: readonly SessionMessageInfo[],
+export function messageSpans(messages: readonly SessionMessageInfo[]): AgentSpan[] {
+  const spans = messages
+    .flatMap((message) => (message.type === "assistant" ? messageSpansOfMessage(message) : []))
+    .sort((left, right) => left.t0 - right.t0 || left.id.localeCompare(right.id))
+  return spans
+}
+
+/** The latest moment any span of a list has reached. */
+export function spansEnd(spans: readonly AgentSpan[]): number {
+  let last = 0
+  for (const span of spans) last = Math.max(last, span.t1 ?? span.t0)
+  return last
+}
+
+/**
+ * The state-dependent tail of a span list: pending-ask, retry and blocked spans
+ * come from the row's state, because the messages do not record the wait.
+ */
+export function spansTail(
+  spans: readonly AgentSpan[],
   options: SpanOptions = {},
 ): AgentSpan[] {
-  const spans = messages
-    .flatMap((message) => (message.type === "assistant" ? messageSpans(message) : []))
-    .sort((left, right) => left.t0 - right.t0 || left.id.localeCompare(right.id))
-  const tail =
-    spans.length === 0
-      ? 0
-      : spans.reduce((last, span) => Math.max(last, span.t1 ?? span.t0), 0)
-  const started = Math.max(tail, options.start ?? 0)
+  const started = Math.max(spansEnd(spans), options.start ?? 0)
   const appended =
     options.state === undefined
       ? []
@@ -184,8 +208,43 @@ export function agentSpans(
           : options.state === "blocked"
             ? [{ id: "wait", kind: "wait" as const, t0: started, letter: "?" as const, name: "waiting", target: "" }]
             : []
+  if (appended.length === 0 && spans.length <= Math.max(1, Math.floor(options.limit ?? SPAN_CAP_PER_SESSION))) {
+    return spans as AgentSpan[]
+  }
   const limit = Math.max(1, Math.floor(options.limit ?? SPAN_CAP_PER_SESSION))
   return [...spans, ...appended].slice(-limit)
+}
+
+/**
+ * Every span a session's loaded messages describe, oldest first. Pending-ask,
+ * retry and blocked spans come from the row's state, because the messages
+ * themselves do not record the wait.
+ */
+export function agentSpans(
+  messages: readonly SessionMessageInfo[],
+  options: SpanOptions = {},
+): AgentSpan[] {
+  return spansTail(messageSpans(messages), options)
+}
+
+/**
+ * `spansTail` for a memoised session: the same state tail keeps the same array
+ * identity, so the token buckets built from it can be reused across frames. The
+ * cache lives on the session's own `SessionData`, so a new derivation (that
+ * session's messages changed) starts clean and the old entries are collected.
+ */
+const tailCache = new WeakMap<SessionData, Map<string, readonly AgentSpan[]>>()
+
+export function spansFor(data: SessionData, options: SpanOptions = {}): readonly AgentSpan[] {
+  if (options.state === undefined) return data.spans
+  const key = `${options.state}\u0000${options.ask ?? ""}\u0000${options.start ?? ""}\u0000${options.limit ?? ""}`
+  const entries = tailCache.get(data)
+  const hit = entries?.get(key)
+  if (hit !== undefined) return hit
+  const spans = spansTail(data.spans, options)
+  if (entries === undefined) tailCache.set(data, new Map([[key, spans]]))
+  else entries.set(key, spans)
+  return spans
 }
 
 /** The span covering `t`, or the last one that ended before it. */
@@ -229,7 +288,9 @@ export function stateAt(row: RosterRow, spans: readonly AgentSpan[], t: number):
 
 /** Messages that had arrived by `t`. */
 export function messagesAt(messages: readonly SessionMessageInfo[], t: number): SessionMessageInfo[] {
-  return messages.filter((message) => message.time.created <= t)
+  if (!Number.isFinite(t)) return messages as SessionMessageInfo[]
+  const last = upperBoundCreated(messages, t)
+  return last >= messages.length ? (messages as SessionMessageInfo[]) : messages.slice(0, last)
 }
 
 /**
@@ -329,11 +390,76 @@ const generated = (message: Extract<SessionMessageInfo, { type: "assistant" }>):
   return message.tokens.output + message.tokens.reasoning
 }
 
+/** First index whose `time.created` is at or after `t`, in a time-ordered list. */
+function lowerBoundCreated(messages: readonly SessionMessageInfo[], t: number): number {
+  let low = 0
+  let high = messages.length
+  while (low < high) {
+    const middle = (low + high) >> 1
+    if (messages[middle]!.time.created < t) low = middle + 1
+    else high = middle
+  }
+  return low
+}
+
+/** First index whose `time.created` is after `t`. */
+function upperBoundCreated(messages: readonly SessionMessageInfo[], t: number): number {
+  let low = 0
+  let high = messages.length
+  while (low < high) {
+    const middle = (low + high) >> 1
+    if (messages[middle]!.time.created <= t) low = middle + 1
+    else high = middle
+  }
+  return low
+}
+
+/** Spans grouped by the message they came from, built once per call. */
+function spansByMessage(spans: readonly AgentSpan[]): ReadonlyMap<string, readonly AgentSpan[]> {
+  const index = new Map<string, AgentSpan[]>()
+  for (const span of spans) {
+    if (span.messageID === undefined) continue
+    const list = index.get(span.messageID)
+    if (list === undefined) index.set(span.messageID, [span])
+    else list.push(span)
+  }
+  return index
+}
+
+/**
+ * Counters the guard test reads: how much of a session a bucket pass really
+ * touched. A pass over all 2,000 messages of a session is the regression this
+ * exists to catch, so the numbers are counts, never wall-clock.
+ */
+export const SPAN_STATS = { bucketCalls: 0, bucketMessages: 0, bucketSpans: 0 }
+
+export function resetSpanStats(): void {
+  SPAN_STATS.bucketCalls = 0
+  SPAN_STATS.bucketMessages = 0
+  SPAN_STATS.bucketSpans = 0
+}
+
+interface BucketMemo {
+  readonly spans: readonly AgentSpan[]
+  readonly key: string
+  readonly buckets: TokenBucket[]
+}
+
+/**
+ * Buckets last computed per owner (a memoised session), so the same window is
+ * computed once even when the overview, the lane and the tabs all ask for it.
+ */
+const bucketMemos = new WeakMap<object, BucketMemo[]>()
+
 /**
  * Token rate per column between `from` and `to`. A message's real tokens are
  * spread evenly over the interval it streamed, so the bars carry signal and
  * never a synthesised wobble; a bucket with no signal reads zero and the lane
  * draws a flat bar for the turn instead.
+ *
+ * Cost scales with the messages inside the window, not with the session's whole
+ * history: spans are indexed by message once (O(spans), not O(messages x spans))
+ * and the message list is clipped by binary search on `created`.
  */
 export function tokenBuckets(
   spans: readonly AgentSpan[],
@@ -341,33 +467,92 @@ export function tokenBuckets(
   from: number,
   to: number,
   columns: number,
+  owner?: object | undefined,
 ): TokenBucket[] {
   const count = Math.max(0, Math.floor(columns))
   if (count === 0) return []
   const step = (to - from) / count
   if (!(step > 0)) return []
+  const key = `${from}\u0000${to}\u0000${count}`
+  if (owner !== undefined) {
+    const entries = bucketMemos.get(owner)
+    if (entries !== undefined) {
+      for (const entry of entries) {
+        if (entry.key === key && entry.spans === spans) return entry.buckets
+      }
+    }
+  }
+  const buckets = computeBuckets(spans, messages, from, to, count, step)
+  if (owner !== undefined) {
+    const entries = bucketMemos.get(owner)
+    const entry = { spans, key, buckets }
+    if (entries === undefined) bucketMemos.set(owner, [entry])
+    else {
+      entries.push(entry)
+      if (entries.length > 6) entries.shift()
+    }
+  }
+  return buckets
+}
+
+function computeBuckets(
+  spans: readonly AgentSpan[],
+  messages: readonly SessionMessageInfo[],
+  from: number,
+  to: number,
+  count: number,
+  step: number,
+): TokenBucket[] {
   const tokens = new Array<number>(count).fill(0)
-  for (const message of messages) {
+  const index = spansByMessage(spans)
+  const last = upperBoundCreated(messages, to)
+  let first = lowerBoundCreated(messages, from)
+  // A message that started before the window can still stream into it: walk
+  // back over the still-open (or later-completing) ones, and stop at the first
+  // that ended before the window began.
+  while (first > 0) {
+    const previous = messages[first - 1]!
+    if (previous.type !== "assistant") {
+      first -= 1
+      continue
+    }
+    if (previous.time.completed !== undefined && previous.time.completed <= from) break
+    first -= 1
+  }
+  SPAN_STATS.bucketCalls += 1
+  SPAN_STATS.bucketMessages += Math.max(0, last - first)
+  SPAN_STATS.bucketSpans += spans.length
+  for (let position = first; position < last; position += 1) {
+    const message = messages[position]!
     if (message.type !== "assistant") continue
     const total = generated(message)
     if (total === 0) continue
-    const own = spans.filter((span) => span.messageID === message.id)
-    const observed = own.reduce((last, span) => Math.max(last, span.t1 ?? span.t0), message.time.created)
+    const own = index.get(message.id)
+    const observed =
+      own === undefined
+        ? message.time.created
+        : own.reduce((latest, span) => Math.max(latest, span.t1 ?? span.t0), message.time.created)
     const start = message.time.created
     const end = message.time.completed ?? (observed > start ? observed : to)
+    if (end <= from) continue
     const length = end - start
     if (!(length > 0)) continue
-    for (let index = 0; index < count; index += 1) {
-      const t0 = from + index * step
+    const firstColumn = Math.max(0, Math.floor((start - from) / step))
+    const lastColumn = Math.min(count - 1, Math.floor((end - from) / step))
+    for (let column = firstColumn; column <= lastColumn; column += 1) {
+      const t0 = from + column * step
       const overlap = Math.min(end, t0 + step) - Math.max(start, t0)
       if (overlap <= 0) continue
-      tokens[index] += (total * overlap) / length
+      tokens[column]! += (total * overlap) / length
     }
   }
-  return tokens.map((value, index) => {
-    const t0 = from + index * step
-    return { t0, t1: t0 + step, tokens: value, rate: value / (step / 1000) }
-  })
+  const out = new Array<TokenBucket>(count)
+  for (let position = 0; position < count; position += 1) {
+    const t0 = from + position * step
+    const value = tokens[position]!
+    out[position] = { t0, t1: t0 + step, tokens: value, rate: value / (step / 1000) }
+  }
+  return out
 }
 
 /** The sparkline's ceiling, in tokens per second: the mockup's own scale. */
@@ -436,20 +621,97 @@ interface Touch {
   readonly verb: "r" | "w"
   readonly at: number
 }
+export type { Touch }
 
-const touches = (session: SpanSession): Touch[] =>
-  session.messages.flatMap((message) =>
-    message.type !== "assistant"
-      ? []
-      : message.content.flatMap((part): Touch[] => {
-          if (part.type !== "tool") return []
-          const letter = toolKind(part.name)
-          if (letter !== "R" && letter !== "E") return []
-          const path = toolPath(part.state.input)
-          if (path === undefined) return []
-          return [{ sessionID: session.sessionID, path, verb: letter === "E" ? "w" : "r", at: part.time.ran ?? part.time.created }]
-        }),
-  )
+/**
+ * One session's reads and writes, in message order. Split out from the merge so
+ * a caller can memoise it per session and only re-walk the branch that changed.
+ */
+export function sessionTouches(session: SpanSession): Touch[] {
+  const out: Touch[] = []
+  for (const message of session.messages) {
+    if (message.type !== "assistant") continue
+    for (const part of message.content) {
+      if (part.type !== "tool") continue
+      const letter = toolKind(part.name)
+      if (letter !== "R" && letter !== "E") continue
+      const path = toolPath(part.state.input)
+      if (path === undefined) continue
+      out.push({
+        sessionID: session.sessionID,
+        path,
+        verb: letter === "E" ? "w" : "r",
+        at: part.time.ran ?? part.time.created,
+      })
+    }
+  }
+  return out
+}
+
+/**
+ * Everything one session's loaded messages derive, computed once. Callers keep
+ * this per session (a memo keyed on that session's messages) so a streamed part
+ * in one branch costs one session's work, never every branch's. Nothing here
+ * depends on the row's state: `spansTail` adds that per frame.
+ */
+export interface SessionData {
+  readonly sessionID: string
+  readonly messages: readonly SessionMessageInfo[]
+  /** Spans the messages describe, oldest first. */
+  readonly spans: readonly AgentSpan[]
+  /** The latest moment any span reached, including open ones. */
+  readonly spanEnd: number
+  /** The newest message's creation time. */
+  readonly newestAt: number
+  /** The newest message completion time; a lane's end may be later than its start. */
+  readonly completedAt: number
+  /** True when the messages carry per-message usage, so a replay can sum it. */
+  readonly usage: boolean
+  /** The message-derived facts the roster reads instead of the messages. */
+  readonly flags: SessionFlags
+  readonly touches: readonly Touch[]
+  /** The session's last assistant text, clipped; its return. */
+  readonly returned?: string
+}
+
+export function sessionData(
+  sessionID: string,
+  messages: readonly SessionMessageInfo[],
+  options: { readonly root?: boolean } = {},
+): SessionData {
+  const spans = messageSpans(messages)
+  let newestAt = 0
+  let completedAt = 0
+  let usage = false
+  let completedAssistant = false
+  let openSubagent = false
+  for (const message of messages) {
+    const time = message.time as { readonly created: number; readonly completed?: number | undefined }
+    newestAt = Math.max(newestAt, time.created)
+    completedAt = Math.max(completedAt, time.completed ?? 0)
+    if (message.type !== "assistant") continue
+    if (message.tokens !== undefined) usage = true
+    if (time.completed !== undefined) completedAssistant = true
+    if (!openSubagent) openSubagent = message.content.some((part) => part.type === "tool" && isOpenSubagentPart(part))
+  }
+  const returned = returnedSummary(messages, 120)
+  return {
+    sessionID,
+    messages,
+    spans,
+    spanEnd: spansEnd(spans),
+    newestAt,
+    completedAt,
+    usage,
+    flags: {
+      completedAssistant,
+      openSubagent,
+      truncated: mayBeTruncated(messages, { root: options.root === true }),
+    },
+    touches: sessionTouches({ sessionID, label: sessionID, messages }),
+    ...(returned === undefined ? {} : { returned }),
+  }
+}
 
 /**
  * The brief's advisory stale-read check: branch B edits a file that branch A
@@ -459,18 +721,18 @@ const touches = (session: SpanSession): Touch[] =>
  * different problem, not a stale read. `to` is the replay playhead: a touch
  * after it has not happened yet.
  */
-export function staleEdits(
-  sessions: readonly SpanSession[],
+export function staleEditsFrom(
+  touches: readonly (readonly Touch[])[],
+  labels: ReadonlyMap<string, string>,
   limit = 20,
   to = Number.POSITIVE_INFINITY,
 ): StaleEdit[] {
-  const labels = new Map(sessions.map((session) => [session.sessionID, session.label]))
   const lastRead = new Map<string, number>()
   const lastWrite = new Map<string, { at: number; sessionID: string }>()
   const found = new Map<string, StaleEdit>()
   const key = (sessionID: string, path: string) => `${sessionID}\u0000${path}`
-  const all = sessions
-    .flatMap(touches)
+  const all = touches
+    .flatMap((list) => list)
     .filter((touch) => touch.at <= to)
     .sort((left, right) => left.at - right.at)
   for (const touch of all) {
@@ -496,4 +758,22 @@ export function staleEdits(
     })
   }
   return [...found.values()].sort((left, right) => left.editedAt - right.editedAt).slice(-limit)
+}
+
+/**
+ * The stale-read check over whole sessions. The UI keeps each session's touches
+ * memoised and calls `staleEditsFrom`; this form is for tests and one-shot use.
+ */
+export function staleEdits(
+  sessions: readonly SpanSession[],
+  limit = 20,
+  to = Number.POSITIVE_INFINITY,
+): StaleEdit[] {
+  const labels = new Map(sessions.map((session) => [session.sessionID, session.label]))
+  return staleEditsFrom(
+    sessions.map(sessionTouches),
+    labels,
+    limit,
+    to,
+  )
 }

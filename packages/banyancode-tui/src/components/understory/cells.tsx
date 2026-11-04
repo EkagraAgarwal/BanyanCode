@@ -1,6 +1,13 @@
-import { Renderable, RGBA, TextAttributes, type OptimizedBuffer, type RenderableOptions, type RenderContext } from "@opentui/core"
+import {
+  OptimizedBuffer,
+  Renderable,
+  RGBA,
+  TextAttributes,
+  type RenderableOptions,
+  type RenderContext,
+} from "@opentui/core"
 import { extend } from "@opentui/solid"
-import { createEffect, createMemo, onCleanup } from "solid-js"
+import { createEffect, createMemo } from "solid-js"
 
 /**
  * A cell grid the lenses draw into. One renderable paints every glyph with its
@@ -9,6 +16,9 @@ import { createEffect, createMemo, onCleanup } from "solid-js"
  *
  * The grid itself is plain data with no renderer in sight, so span and lane
  * code can build a frame in a pure function and a unit test can assert on it.
+ * Colours are packed bytes, not `RGBA` objects, and the grid keeps a change
+ * counter: a frame that paints the same cells again costs no upload and no
+ * renderer work.
  */
 
 const SPACE = 32
@@ -26,49 +36,107 @@ export interface Cell {
   readonly bold: boolean
 }
 
+/** RGBA to the packed 8-bit channels the buffer planes store. */
+export function pack(color: RGBA): number {
+  const buffer = color.buffer
+  return (((buffer[0]! & 255) << 24) | ((buffer[1]! & 255) << 16) | ((buffer[2]! & 255) << 8) | (buffer[3]! & 255)) >>> 0
+}
+
+/** The inverse of `pack`, for the read path only: never called while painting. */
+export function unpack(value: number): RGBA {
+  return RGBA.fromInts((value >>> 24) & 255, (value >>> 16) & 255, (value >>> 8) & 255, value & 255)
+}
+
+const TRANSPARENT = 0
+
 export class Grid {
   readonly width: number
   readonly height: number
   private readonly glyphs: Uint32Array
-  private readonly foreground: RGBA[]
-  private readonly background: RGBA[]
+  /** Packed 8-bit RGBA, one entry per cell. */
+  private readonly foreground: Uint32Array
+  private readonly background: Uint32Array
   private readonly bold: Uint8Array
   private readonly regions: Array<string | undefined>
-  private defaultFg: RGBA
-  private defaultBg: RGBA
+  private defaultFg: number
+  private defaultBg: number
+  /** Bumped only when a cell's drawn content actually changes. */
+  private changes = 0
 
   constructor(width: number, height: number) {
     this.width = Math.max(1, Math.floor(width))
     this.height = Math.max(1, Math.floor(height))
     const size = this.width * this.height
     this.glyphs = new Uint32Array(size).fill(SPACE)
-    this.foreground = new Array<RGBA>(size).fill(RGBA.fromInts(0, 0, 0, 0))
-    this.background = new Array<RGBA>(size).fill(RGBA.fromInts(0, 0, 0, 0))
+    this.foreground = new Uint32Array(size).fill(TRANSPARENT)
+    this.background = new Uint32Array(size).fill(TRANSPARENT)
     this.bold = new Uint8Array(size)
     this.regions = new Array<string | undefined>(size)
-    this.defaultFg = this.foreground[0]!
-    this.defaultBg = this.background[0]!
+    this.defaultFg = TRANSPARENT
+    this.defaultBg = TRANSPARENT
   }
 
-  /** Resets every cell to a blank one with `background`/`foreground`, and drops hit regions. */
-  clear(background: RGBA = this.defaultBg, foreground: RGBA = this.defaultFg): void {
-    this.defaultBg = background
-    this.defaultFg = foreground
-    this.glyphs.fill(SPACE)
-    this.foreground.fill(foreground)
-    this.background.fill(background)
-    this.bold.fill(0)
+  /** How many real cell changes this grid has seen; equal means an identical frame. */
+  get revision(): number {
+    return this.changes
+  }
+
+  /**
+   * Resets every cell to a blank one with `background`/`foreground`, and drops
+   * hit regions. Only cells that were not already blank are counted as changes,
+   * so repainting the same frame leaves `revision` alone.
+   */
+  clear(background: RGBA = unpack(this.defaultBg), foreground: RGBA = unpack(this.defaultFg)): void {
+    const bg = pack(background)
+    const fg = pack(foreground)
+    this.defaultBg = bg
+    this.defaultFg = fg
+    const size = this.width * this.height
+    for (let index = 0; index < size; index += 1) {
+      if (
+        this.glyphs[index] === SPACE &&
+        this.foreground[index] === fg &&
+        this.background[index] === bg &&
+        this.bold[index] === 0
+      ) {
+        continue
+      }
+      this.glyphs[index] = SPACE
+      this.foreground[index] = fg
+      this.background[index] = bg
+      this.bold[index] = 0
+      this.changes += 1
+    }
     this.regions.fill(undefined)
   }
 
   setCell(x: number, y: number, glyph: string, fg: RGBA, bg?: RGBA, bold = false): void {
     if (!this.inside(x, y)) return
+    this.write(x, y, glyph.codePointAt(0) ?? SPACE, pack(fg), bg === undefined ? undefined : pack(bg), bold ? 1 : 0)
+  }
+
+  /** `setCell` from already-packed channels, for the draw code's hot loops. */
+  setPacked(x: number, y: number, glyph: number, fg: number, bg?: number, bold = false): void {
+    if (!this.inside(x, y)) return
+    this.write(x, y, glyph, fg, bg, bold ? 1 : 0)
+  }
+
+  private write(x: number, y: number, glyph: number, fg: number, bg: number | undefined, bold: number): void {
     const index = y * this.width + x
-    const point = glyph.codePointAt(0)
-    this.glyphs[index] = point ?? SPACE
+    const nextBg = bg === undefined ? this.background[index]! : bg
+    if (
+      this.glyphs[index] === glyph &&
+      this.foreground[index] === fg &&
+      this.background[index] === nextBg &&
+      this.bold[index] === bold
+    ) {
+      return
+    }
+    this.glyphs[index] = glyph
     this.foreground[index] = fg
-    if (bg !== undefined) this.background[index] = bg
-    this.bold[index] = bold ? 1 : 0
+    this.background[index] = nextBg
+    this.bold[index] = bold
+    this.changes += 1
   }
 
   /** Writes `text` one code point per cell; returns the next free x. */
@@ -88,8 +156,11 @@ export class Grid {
 
   /** Fills a rectangle with a blank cell on `bg`. */
   fill(x: number, y: number, width: number, height: number, bg: RGBA): void {
+    const packed = pack(bg)
     for (let row = y; row < y + height; row += 1) {
-      for (let column = x; column < x + width; column += 1) this.setCell(column, row, " ", bg, bg)
+      for (let column = x; column < x + width; column += 1) {
+        if (this.inside(column, row)) this.write(column, row, SPACE, packed, packed, 0)
+      }
     }
   }
 
@@ -99,10 +170,6 @@ export class Grid {
    */
   lowerBlock(x: number, y: number, eighths: number, fg: RGBA, bg: RGBA): void {
     const split = Math.max(0, Math.min(8, Math.round(eighths)))
-    if (split === 0) {
-      this.setCell(x, y, " ", fg, bg)
-      return
-    }
     this.setCell(x, y, LOWER_BLOCK[split]!, fg, bg)
   }
 
@@ -112,10 +179,6 @@ export class Grid {
    */
   leftBlock(x: number, y: number, eighths: number, fg: RGBA, bg: RGBA): void {
     const split = Math.max(0, Math.min(8, Math.round(eighths)))
-    if (split === 0) {
-      this.setCell(x, y, " ", fg, bg)
-      return
-    }
     this.setCell(x, y, LEFT_BLOCK[split]!, fg, bg)
   }
 
@@ -133,6 +196,12 @@ export class Grid {
     return this.regions[y * this.width + x]
   }
 
+  /** The glyph at a cell, for the "do not paint over" checks the draw code makes. */
+  glyphAt(x: number, y: number): string | undefined {
+    if (!this.inside(x, y)) return undefined
+    return String.fromCodePoint(this.glyphs[y * this.width + x]!)
+  }
+
   cell(x: number, y: number): Cell | undefined {
     if (!this.inside(x, y)) return undefined
     const index = y * this.width + x
@@ -140,8 +209,8 @@ export class Grid {
       x,
       y,
       glyph: String.fromCodePoint(this.glyphs[index]!),
-      fg: this.foreground[index]!,
-      bg: this.background[index]!,
+      fg: unpack(this.foreground[index]!),
+      bg: unpack(this.background[index]!),
       bold: this.bold[index] === 1,
     }
   }
@@ -167,11 +236,22 @@ export class Grid {
   /** @internal Cell state for the renderable, in row-major order. */
   read(): {
     readonly glyphs: Uint32Array
-    readonly foreground: readonly RGBA[]
-    readonly background: readonly RGBA[]
+    readonly foreground: Uint32Array
+    readonly background: Uint32Array
     readonly bold: Uint8Array
+    readonly revision: number
+    readonly width: number
+    readonly height: number
   } {
-    return { glyphs: this.glyphs, foreground: this.foreground, background: this.background, bold: this.bold }
+    return {
+      glyphs: this.glyphs,
+      foreground: this.foreground,
+      background: this.background,
+      bold: this.bold,
+      revision: this.changes,
+      width: this.width,
+      height: this.height,
+    }
   }
 }
 
@@ -179,15 +259,28 @@ type CellGridOptions = RenderableOptions<CellGridRenderable> & {
   grid?: Grid
 }
 
-// Colours are packed to the 8-bit channels the buffer stores, so the diff is a
-// numeric compare per cell with no allocation.
-function pack(color: RGBA): number {
-  return ((color.buffer[0]! & 255) << 24) | ((color.buffer[1]! & 255) << 16) | ((color.buffer[2]! & 255) << 8) | (color.buffer[3]! & 255)
-}
+/** Counters a test can read: an unchanged frame must leave both alone. */
+export const CELL_GRID_STATS = { uploads: 0, paints: 0 }
 
+const BOLD = TextAttributes.BOLD
+
+/**
+ * Paints a `Grid` through one owned frame buffer. The grid's cells are copied
+ * into the buffer's native planes in a single `withBuffers` scope and the whole
+ * rectangle is composited with one `drawFrameBuffer` call, so a 6,000-cell lens
+ * costs one FFI call per frame instead of 6,000. A frame whose cells did not
+ * change skips the upload entirely.
+ *
+ * Paint hooks can only record drawing, so the planes are not the destination's:
+ * the renderable owns a scratch buffer created from the scene, exactly as
+ * `OptimizedBuffer.create` documents.
+ */
 export class CellGridRenderable extends Renderable {
   private cells: Grid
-  private previous: { glyphs: Uint32Array; fg: Int32Array; bg: Int32Array; bold: Uint8Array } | undefined
+  private scratch: OptimizedBuffer | undefined
+  private uploadedRevision = -1
+  private uploadedWidth = 0
+  private uploadedHeight = 0
 
   constructor(ctx: RenderContext, options: CellGridOptions) {
     super(ctx, options)
@@ -199,35 +292,26 @@ export class CellGridRenderable extends Renderable {
   }
 
   set grid(value: Grid) {
-    if (this.cells === value) return
     this.cells = value
-    this.requestRender()
+  }
+
+  /** Replaces the drawn grid; returns true when the frame actually changed. */
+  publish(grid: Grid): boolean {
+    if (grid !== this.cells) {
+      this.cells = grid
+      this.uploadedRevision = -1
+    }
+    const changed = grid.revision !== this.uploadedRevision
+    if (changed) this.requestRender()
+    return changed
   }
 
   /**
-   * Publishes the drawn grid. Only a frame that differs from the last one asks
-   * the renderer for work, so an idle panel stays at zero frames.
+   * Kept for the tests and callers that publish by hand: reports whether the
+   * grid has changed since the last paint, and marks that frame as published.
    */
   commit(): boolean {
-    const current = this.cells.read()
-    const size = current.glyphs.length
-    const previous = this.previous
-    if (previous === undefined || previous.glyphs.length !== size) {
-      this.snapshot(current)
-      this.requestRender()
-      return true
-    }
-    let changed = false
-    for (let index = 0; index < size && !changed; index += 1) {
-      if (current.glyphs[index] !== previous.glyphs[index]) changed = true
-      else if (current.bold[index] !== previous.bold[index]) changed = true
-      else if (pack(current.foreground[index]!) !== previous.fg[index]) changed = true
-      else if (pack(current.background[index]!) !== previous.bg[index]) changed = true
-    }
-    if (!changed) return false
-    this.snapshot(current)
-    this.requestRender()
-    return true
+    return this.publish(this.cells)
   }
 
   protected override renderSelf(buffer: OptimizedBuffer): void {
@@ -235,39 +319,76 @@ export class CellGridRenderable extends Renderable {
     const width = Math.min(grid.width, this.width)
     const height = Math.min(grid.height, this.height)
     if (width <= 0 || height <= 0) return
-    const cells = grid.read()
-    for (let y = 0; y < height; y += 1) {
-      for (let x = 0; x < width; x += 1) {
-        const index = y * grid.width + x
-        const attributes = cells.bold[index] === 1 ? TextAttributes.BOLD : 0
-        buffer.setCell(
-          this.screenX + x,
-          this.screenY + y,
-          String.fromCodePoint(cells.glyphs[index]!),
-          cells.foreground[index]!,
-          cells.background[index]!,
-          attributes,
-        )
-      }
+    const scratch = this.ensureScratch(width, height)
+    if (scratch === undefined) return
+    const cell = grid.read()
+    if (cell.revision !== this.uploadedRevision || this.uploadedWidth !== width || this.uploadedHeight !== height) {
+      this.upload(scratch, cell, width, height)
+      this.uploadedRevision = cell.revision
+      this.uploadedWidth = width
+      this.uploadedHeight = height
+      CELL_GRID_STATS.uploads += 1
     }
+    CELL_GRID_STATS.paints += 1
+    buffer.drawFrameBuffer(Math.trunc(this.screenX), Math.trunc(this.screenY), scratch)
   }
 
-  private snapshot(cells: ReturnType<Grid["read"]>): void {
-    const size = cells.glyphs.length
-    const previous =
-      this.previous !== undefined && this.previous.glyphs.length === size
-        ? this.previous
-        : {
-            glyphs: new Uint32Array(size),
-            fg: new Int32Array(size),
-            bg: new Int32Array(size),
-            bold: new Uint8Array(size),
-          }
-    previous.glyphs.set(cells.glyphs)
-    previous.bold.set(cells.bold)
-    cells.foreground.forEach((color, index) => (previous.fg[index] = pack(color)))
-    cells.background.forEach((color, index) => (previous.bg[index] = pack(color)))
-    this.previous = previous
+  private ensureScratch(width: number, height: number): OptimizedBuffer | undefined {
+    if (this.scratch !== undefined && this.scratch.width === width && this.scratch.height === height) return this.scratch
+    this.scratch?.destroy()
+    this.scratch = OptimizedBuffer.create(width, height, this.ctx.widthMethod, {
+      owner: this.ctx.nativeScene,
+      id: `cell-grid-${this.id}`,
+    })
+    this.uploadedRevision = -1
+    return this.scratch
+  }
+
+  /**
+   * Copies the grid into the scratch buffer's planes. The plane layout is the
+   * one `BufferAccess` documents: one `u32` glyph and one `u32` attribute per
+   * cell, and four `u16` colour channels per cell (each holding a byte).
+   */
+  private upload(
+    scratch: OptimizedBuffer,
+    cell: ReturnType<Grid["read"]>,
+    width: number,
+    height: number,
+  ): void {
+    scratch.withBuffers((cells) => {
+      const chars = cells.char as Uint32Array
+      const fg = cells.fg as Uint16Array
+      const bg = cells.bg as Uint16Array
+      const attributes = cells.attributes as Uint32Array
+      const stride = cells.width
+      for (let y = 0; y < height; y += 1) {
+        const sourceRow = y * cell.width
+        const targetRow = y * stride
+        for (let x = 0; x < width; x += 1) {
+          const source = sourceRow + x
+          const target = targetRow + x
+          const foreground = cell.foreground[source]!
+          const background = cell.background[source]!
+          chars[target] = cell.glyphs[source]!
+          attributes[target] = cell.bold[source] === 1 ? BOLD : 0
+          const fgAt = target * 4
+          fg[fgAt] = foreground >>> 24
+          fg[fgAt + 1] = (foreground >>> 16) & 255
+          fg[fgAt + 2] = (foreground >>> 8) & 255
+          fg[fgAt + 3] = foreground & 255
+          bg[fgAt] = background >>> 24
+          bg[fgAt + 1] = (background >>> 16) & 255
+          bg[fgAt + 2] = (background >>> 8) & 255
+          bg[fgAt + 3] = background & 255
+        }
+      }
+    })
+  }
+
+  protected override destroyOwnedResources(): void {
+    this.scratch?.destroy()
+    this.scratch = undefined
+    super.destroyOwnedResources?.()
   }
 }
 
@@ -324,8 +445,7 @@ export function CellGrid(props: CellGridProps) {
     target.clear(props.background)
     props.draw(target)
     if (renderable === undefined) return
-    renderable.grid = target
-    renderable.commit()
+    renderable.publish(target)
   }
 
   createEffect(publish)
@@ -342,10 +462,6 @@ export function CellGrid(props: CellGridProps) {
     if (node === undefined) return { region: undefined, x: 0, y: 0 }
     return { region: node.grid.hitAt(x - node.screenX, y - node.screenY), x: x - node.screenX, y: y - node.screenY }
   }
-
-  onCleanup(() => {
-    dragging = false
-  })
 
   return (
     <cell_grid

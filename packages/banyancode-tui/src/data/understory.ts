@@ -159,6 +159,11 @@ export interface RosterInput {
   readonly status?: ((sessionID: string) => "running" | "idle") | undefined
   /** Loaded messages, needed only to derive `blocked`. */
   readonly messages?: ((sessionID: string) => readonly SessionMessageInfo[]) | undefined
+  /**
+   * The message-derived flags, when the caller already memoised them per
+   * session. Preferred over `messages`: the roster then reads no message list.
+   */
+  readonly flags?: ((sessionID: string) => SessionFlags | undefined) | undefined
   /** True while the host still has an older page for that session. */
   readonly more?: ((sessionID: string) => boolean | undefined) | undefined
 }
@@ -195,17 +200,31 @@ const isCompletedAssistant = (message: SessionMessageInfo): boolean =>
   message.type === "assistant" && message.time.completed !== undefined
 
 /** An open (streaming or running) `subagent` tool part. */
-function openSubagent(messages: readonly SessionMessageInfo[]): boolean {
+export function isOpenSubagentPart(part: SessionMessageAssistantTool): boolean {
+  return (
+    canonicalTool(part.name) === "subagent" &&
+    (part.state.status === "streaming" || part.state.status === "running")
+  )
+}
+
+/** True while any `subagent` call in these messages is still open. */
+export function hasOpenSubagent(messages: readonly SessionMessageInfo[]): boolean {
   return messages.some(
     (message) =>
       message.type === "assistant" &&
-      message.content.some(
-        (part) =>
-          part.type === "tool" &&
-          canonicalTool(part.name) === "subagent" &&
-          (part.state.status === "streaming" || part.state.status === "running"),
-      ),
+      message.content.some((part) => part.type === "tool" && isOpenSubagentPart(part)),
   )
+}
+
+/**
+ * The three message-derived facts the roster needs, so it never has to read a
+ * session's messages itself: a caller that memoises them per session keeps a
+ * streamed part from re-walking every branch.
+ */
+export interface SessionFlags {
+  readonly completedAssistant: boolean
+  readonly openSubagent: boolean
+  readonly truncated: boolean
 }
 
 /**
@@ -233,7 +252,7 @@ function understoryState(input: {
   readonly killed: boolean
   readonly pending: number
   readonly running: boolean
-  readonly messages: readonly SessionMessageInfo[]
+  readonly completedAssistant: boolean
 }): UnderstoryState {
   // `interrupted` is not `killed`: Esc in a child also produces it, so only
   // the durable kill list earns the killed state. A non-killed interruption
@@ -250,7 +269,7 @@ function understoryState(input: {
   // The root is always available to the user; an idle root is not finished.
   if (input.root) return "idle"
   if (input.session.time.idle !== undefined) return "done"
-  return input.messages.some(isCompletedAssistant) ? "done" : "idle"
+  return input.completedAssistant ? "done" : "idle"
 }
 
 /**
@@ -287,6 +306,17 @@ export function rosterRows(input: RosterInput): RosterRow[] {
   const messagesOf = input.messages ?? (() => [])
   const pendingOf = input.pending ?? (() => 0)
   const stateOf = new Map<string, UnderstoryState>()
+  // Each fact is only derived where it is read: an idle row never asks whether
+  // a subagent call is open, and the truncation cap short-circuits on length, so
+  // the fallback path costs no full message walk.
+  const flagOf = (sessionID: string, sessionRoot: boolean, key: keyof SessionFlags): boolean => {
+    const provided = input.flags?.(sessionID)
+    if (provided !== undefined) return provided[key]
+    const messages = messagesOf(sessionID)
+    if (key === "completedAssistant") return messages.some(isCompletedAssistant)
+    if (key === "openSubagent") return hasOpenSubagent(messages)
+    return mayBeTruncated(messages, { root: sessionRoot })
+  }
 
   for (const entry of ordered) {
     const node = nodes.get(entry.session.id)
@@ -301,7 +331,7 @@ export function rosterRows(input: RosterInput): RosterRow[] {
         killed: killed.has(session.id),
         pending: pendingOf(session.id),
         running,
-        messages: messagesOf(session.id),
+        completedAssistant: flagOf(session.id, entry.depth === 0, "completedAssistant"),
       }),
     )
   }
@@ -335,7 +365,7 @@ export function rosterRows(input: RosterInput): RosterRow[] {
     const sessionID = entry.session.id
     if (!hasLiveDescendant(sessionID)) continue
     const own = stateOf.get(sessionID)
-    if (own === "running" && !openSubagent(messagesOf(sessionID))) continue
+    if (own === "running" && !flagOf(sessionID, entry.depth === 0, "openSubagent")) continue
     if (own !== "running" && isLiveState(own!)) continue
     stateOf.set(sessionID, "blocked")
   }
@@ -402,7 +432,7 @@ export function rosterRows(input: RosterInput): RosterRow[] {
       ...(endedAt === undefined ? {} : { endedAt }),
       // The cursor is authoritative when the host exposes it: a session with no
       // older page left is complete even if it is longer than one page.
-      historyMayBeTruncated: input.more?.(session.id) ?? mayBeTruncated(messagesOf(session.id), { root }),
+      historyMayBeTruncated: input.more?.(session.id) ?? flagOf(session.id, root, "truncated"),
       hasChildren: (rowChildren.get(session.id) ?? []).length > 0,
     }
   })
@@ -781,6 +811,8 @@ export interface InspectorInput {
   readonly root: string
   readonly selected?: string | undefined
   readonly messages: (sessionID: string) => readonly SessionMessageInfo[]
+  /** A branch's last words, when the caller already derived them per session. */
+  readonly returned?: ((sessionID: string) => string | undefined) | undefined
 }
 
 const costField = (cost: number): { readonly cost?: number } => (cost === 0 ? {} : { cost })
@@ -820,7 +852,10 @@ export function runSheet(input: InspectorInput): RunSheet | undefined {
       // Only a finished branch has a return. A running branch has not returned
       // yet, and a failed one's last words are not a successful return, so its
       // summary is omitted rather than mislabelled.
-      const returned = row.state === "done" ? returnedSummary(input.messages(row.sessionID), 120) : undefined
+      const returned =
+        row.state === "done"
+          ? (input.returned?.(row.sessionID) ?? returnedSummary(input.messages(row.sessionID), 120))
+          : undefined
       return {
         sessionID: row.sessionID,
         label: row.label,
