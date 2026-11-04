@@ -1260,6 +1260,84 @@ test("loads bounded message pages", async () => {
   }
 })
 
+test("an older page survives a replacing newest-window fetch", async () => {
+  const api = OpenCode.make({
+    baseUrl: "http://opencode.local",
+    fetch: async (input, init) => {
+      const url = new URL((input instanceof Request ? input : new Request(input, init)).url)
+      const cursor = url.searchParams.get("cursor")
+      if (cursor === "older") {
+        return Response.json({ data: [{ id: "msg_1", type: "user", text: "old", time: { created: 1 } }], cursor: {} })
+      }
+      return Response.json({
+        data: [{ id: "msg_2", type: "user", text: "new", time: { created: 2 } }],
+        cursor: { next: "older" },
+      })
+    },
+  })
+  const setup = createRoot((dispose) => ({
+    data: createData({
+      api: () => api,
+      directory: "/project",
+      event: { on: () => () => {}, listen: () => () => {} },
+    }),
+    dispose,
+  }))
+  try {
+    await setup.data.session.message.sync("ses_refresh")
+    await setup.data.session.message.loadMore("ses_refresh")
+    expect(setup.data.session.message.list("ses_refresh").map((message) => message.id)).toEqual(["msg_1", "msg_2"])
+    expect(setup.data.session.message.more("ses_refresh")).toBe(false)
+
+    // A fresh event-driven fetch replaces the newest window; the appended
+    // older page must not be thrown away with it.
+    setup.data.session.message.invalidate("ses_refresh")
+    await setup.data.session.message.sync("ses_refresh")
+    expect(setup.data.session.message.list("ses_refresh").map((message) => message.id)).toEqual(["msg_1", "msg_2"])
+  } finally {
+    setup.dispose()
+  }
+})
+
+test("older pages stop at the per-session history cap", async () => {
+  let requests = 0
+  const api = OpenCode.make({
+    baseUrl: "http://opencode.local",
+    fetch: async (input, init) => {
+      const url = new URL((input instanceof Request ? input : new Request(input, init)).url)
+      requests += 1
+      const cursor = url.searchParams.get("cursor")
+      const page = cursor === null ? 0 : Number(cursor)
+      return Response.json({
+        data: Array.from({ length: 20 }, (_, index) => ({
+          id: `msg_${page}_${index}`,
+          type: "user",
+          text: "history",
+          time: { created: 100_000 - page * 20 + index },
+        })),
+        cursor: { next: String(page + 1) },
+      })
+    },
+  })
+  const setup = createRoot((dispose) => ({
+    data: createData({
+      api: () => api,
+      directory: "/project",
+      event: { on: () => () => {}, listen: () => () => {} },
+    }),
+    dispose,
+  }))
+  try {
+    await setup.data.session.message.sync("ses_refresh")
+    for (let page = 0; page < 110; page += 1) await setup.data.session.message.loadMore("ses_refresh")
+    expect(requests).toBe(100)
+    expect(setup.data.session.message.list("ses_refresh")).toHaveLength(2000)
+    expect(setup.data.session.message.loading("ses_refresh")).toBe(false)
+  } finally {
+    setup.dispose()
+  }
+})
+
 test.each(["success", "failure", "cancel", "cancel-retry", "cancel-page", "join-cancel", "join-failure"])(
   "bulk history (%s)",
   async (mode) => {

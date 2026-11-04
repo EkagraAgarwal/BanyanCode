@@ -85,6 +85,12 @@ export interface Data {
       get(sessionID: string, messageID: string): SessionMessageInfo | undefined
       sync(sessionID: string): Promise<void>
       invalidate(sessionID: string): void
+      /** True while an older page of this session can still be loaded. */
+      more?(sessionID: string): boolean
+      /** True while an older-page request for this session is in flight. */
+      loading?(sessionID: string): boolean
+      /** Append one older page; bounded and deduplicated by the client. */
+      loadMore?(sessionID: string): Promise<void>
     }
     readonly permission: {
       list(sessionID: string): PermissionRequest[] | undefined

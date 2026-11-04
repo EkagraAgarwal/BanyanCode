@@ -90,6 +90,12 @@ export type CreateDataInput = {
 }
 
 const messagePageLimit = 20
+/**
+ * A session's loaded transcript is bounded. Older pages are appended only on
+ * demand, and once the bound is reached the page request is refused rather
+ * than growing the store without limit.
+ */
+export const MESSAGE_HISTORY_CAP = 2000
 // Trailing window for event bursts that each ask for the same refetch.
 export const settleMs = 150
 
@@ -1840,11 +1846,30 @@ export function createData(config: CreateDataInput) {
             const local = (store.session.message[sessionID] ?? []).filter(
               (item) => !ids.has(item.id) && (outbox.has(item.id) || admitted.has(item.id)),
             )
-            const messages = local.length === 0 ? fetched : [...fetched, ...local]
+            // Older pages already appended by `loadMore` are history this
+            // newest-window fetch knows nothing about. Keeping them means an
+            // append that lands before a replace cannot be wiped by it.
+            const oldest = fetched[0]?.time.created
+            const older =
+              oldest === undefined
+                ? []
+                : (store.session.message[sessionID] ?? []).filter(
+                    (item) =>
+                      !ids.has(item.id) &&
+                      !outbox.has(item.id) &&
+                      !admitted.has(item.id) &&
+                      item.time.created < oldest,
+                  )
+            const messages = [...older, ...fetched, ...local]
+            // When older pages are already loaded, the cursor belongs to the
+            // oldest loaded page, not this newest window. Keeping it is what
+            // stops an append from being raced by a replace (and vice versa):
+            // the next page stays the same page.
+            const cursor = older.length > 0 ? store.session.messageCursor[sessionID] : (response.cursor.next ?? undefined)
             batch(() => {
               messageIndex.set(sessionID, new Map(messages.map((message, index) => [message.id, index])))
               setStore("session", "message", sessionID, reconcile(messages))
-              setStore("session", "messageCursor", sessionID, response.cursor.next ?? undefined)
+              setStore("session", "messageCursor", sessionID, cursor)
             })
           })
         },
@@ -1882,15 +1907,19 @@ export function createData(config: CreateDataInput) {
           }
           const cursor = store.session.messageCursor[sessionID]
           if (!cursor || signal?.aborted) return
+          const room = MESSAGE_HISTORY_CAP - (store.session.message[sessionID]?.length ?? 0)
+          if (room <= 0) return
           setStore("session", "messageLoading", sessionID, true)
           const request = (async () => {
             const fetched: SessionMessageInfo[] = []
             let next: string | undefined = cursor
             do {
+              const limit = Math.min(options?.all ? 200 : messagePageLimit, room - fetched.length)
+              if (limit <= 0) break
               const response = await api().message.list(
                 {
                   sessionID,
-                  limit: options?.all ? 200 : messagePageLimit,
+                  limit,
                   cursor: next,
                 },
                 { signal },
