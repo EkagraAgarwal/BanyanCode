@@ -174,4 +174,29 @@ describe("system register", () => {
         await Effect.runPromise(Scope.close(scope, Exit.void)).catch(() => {})
       }
     }))
+
+  test("paces the sample loop instead of spinning it", () =>
+    withDirectory(async (directory) => {
+      const harness = makeContext(directory)
+      const sampler = fakeMonitor()
+      const scope = await Effect.runPromise(Scope.make())
+      try {
+        await Effect.runPromise(
+          register(harness.ctx, {
+            storage,
+            config: configFor(directory),
+            monitor: sampler.monitor,
+            statusInterval: "10 millis",
+          }).pipe(Effect.provideService(Scope.Scope, scope)),
+        )
+        // Pre-fix the pause sat above `Effect.forever`, so every iteration after
+        // the first ran back to back: thousands of samples and pushes a second
+        // (100% of a core) and a repaint per push in every attached client.
+        await Bun.sleep(120)
+        expect(sampler.calls()).toBeLessThanOrEqual(30)
+        expect(harness.events.length).toBeLessThanOrEqual(30)
+      } finally {
+        await Effect.runPromise(Scope.close(scope, Exit.void)).catch(() => {})
+      }
+    }))
 })

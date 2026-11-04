@@ -156,6 +156,9 @@ export interface Live {
 const GRAPH_NODE_LIMIT = 2000
 const GRAPH_EDGE_LIMIT = 8000
 
+/** Longest a pushed host sample waits before it is applied (4 Hz ceiling). */
+export const SYSTEM_STATUS_COALESCE_MS = 250
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
@@ -473,6 +476,17 @@ export function createLive(context: Context): Live {
     left.vramUsedBytes === right.vramUsedBytes &&
     left.gpuTotalBytes === right.gpuTotalBytes
 
+  let pendingSystem: SystemStatus | undefined
+  let systemTimer: ReturnType<typeof setTimeout> | undefined
+  // Leading edge applies at once (a fresh sample is never held back), then a
+  // single window caps the rest at 4 Hz and always flushes the newest value.
+  const flushSystem = () => {
+    const next = pendingSystem
+    pendingSystem = undefined
+    if (next !== undefined) applySystemStatus(next)
+    systemTimer = next === undefined ? undefined : setTimeout(flushSystem, SYSTEM_STATUS_COALESCE_MS)
+  }
+
   const applySystemStatus = (next: SystemStatus) => {
     const previous = sysStatus()
     // CPU is a delta, so an early sample has none. Keep the last number rather
@@ -511,8 +525,14 @@ export function createLive(context: Context): Live {
   }
 
   const onSystem = rpc.system.events.on("updated", (event) => {
-    applySystemStatus(event.data)
     setSysAvailability("available")
+    // The host samples at its own cadence, and a busy or misbehaving sampler can
+    // push far faster than a health row can change. The first sample of a burst
+    // applies immediately and the rest coalesce into one trailing update, so the
+    // panel lands on the real final numbers instead of repainting per event.
+    pendingSystem = event.data
+    if (systemTimer !== undefined) return
+    flushSystem()
   })
   disposers.push(onSystem)
 
@@ -618,6 +638,11 @@ export function createLive(context: Context): Live {
 
   const dispose = () => {
     disposed = true
+    if (systemTimer !== undefined) {
+      clearTimeout(systemTimer)
+      systemTimer = undefined
+    }
+    pendingSystem = undefined
     stopLocationWatch()
     for (const off of disposers) off()
     disposers.length = 0

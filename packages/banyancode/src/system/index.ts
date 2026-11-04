@@ -117,18 +117,25 @@ export const register = (ctx: Context, deps: SystemDeps): Effect.Effect<void, ne
     // Each iteration is guarded: one rejected probe must not end the stream for
     // the rest of the process.
     const scope = yield* Scope.Scope
+    const interval = deps.statusInterval ?? STATUS_INTERVAL
     const publisher = yield* Effect.forkDetach(
       Effect.gen(function* () {
-        yield* Effect.sleep(deps.statusInterval ?? STATUS_INTERVAL)
+        yield* Effect.sleep(interval)
         yield* Effect.forever(
           Effect.gen(function* () {
             const status = yield* Effect.promise(() => monitor.status())
             yield* publishStatus(rpc, status)
+            // The pause belongs inside the loop: hoisting it above `forever`
+            // makes every iteration after the first one run back to back, which
+            // samples the host and pushes `updated` thousands of times a second.
+            yield* Effect.sleep(interval)
           }).pipe(
+            // One rejected probe must not end the stream, and its retry has to
+            // wait a full tick too or a failing probe becomes the same hot loop.
             Effect.catchCause((cause) =>
               Effect.logWarning("banyancode: system status sample failed; retrying on the next tick", {
                 cause: Cause.pretty(cause),
-              }),
+              }).pipe(Effect.andThen(Effect.sleep(interval))),
             ),
           ),
         )

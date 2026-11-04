@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import type { Context } from "@opencode/plugin/tui/context"
+import { createEffect, createRoot } from "solid-js"
 import { SystemPanel, SYSTEM_PRIME_MS, SYSTEM_POLL_MS, type SystemPanelTimers } from "../src/components/sidebar/system-status"
 import type { SystemStatus } from "../src/data/pending-rpc"
-import { createLive } from "../src/data/live"
+import { SYSTEM_STATUS_COALESCE_MS, createLive } from "../src/data/live"
 import { context, mount } from "./harness"
 
 /**
@@ -199,12 +200,43 @@ test("a push that repeats the polled sample does not re-render", async () => {
     await app.renderOnce()
     expect(app.captureCharFrame()).toBe(polled)
 
-    // A genuinely new sample still lands.
+    // A genuinely new sample still lands (after the coalescing window closes).
     client.push(sample(4))
+    await Bun.sleep(SYSTEM_STATUS_COALESCE_MS * 2)
     await app.renderOnce()
     expect(lineOf(app.captureCharFrame(), "CPU")).toContain("50%")
   } finally {
     app.renderer.destroy()
+    live.dispose()
+  }
+})
+
+test("a pushed burst collapses to the newest sample at 4 Hz", async () => {
+  const client = fakeClient()
+  const live = createLive(client.context)
+  // Count every value the panel would have painted, instead of counting paints.
+  const seen: number[] = []
+  const stop = createRoot((dispose) => {
+    createEffect(() => {
+      const cpu = live.system.status()?.cpuPercent
+      if (cpu !== undefined) seen.push(cpu)
+    })
+    return dispose
+  })
+  try {
+    await Bun.sleep(0)
+    seen.length = 0
+    // 200 pushes inside one window: a real host storm.
+    for (let i = 0; i < 200; i++) client.push(sample(100 + i))
+    // The first push applies at once; the rest wait for the trailing flush.
+    expect(seen).toEqual([1010])
+    await Bun.sleep(SYSTEM_STATUS_COALESCE_MS * 2)
+    // One trailing update with the LAST value pushed, never 200 writes.
+    expect(seen).toEqual([1010, 3000])
+    // Idle again: the coalescer leaves no timer behind.
+    expect(live.system.status()?.cpuPercent).toBe(3000)
+  } finally {
+    stop()
     live.dispose()
   }
 })

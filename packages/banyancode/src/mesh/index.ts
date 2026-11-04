@@ -5,6 +5,7 @@ import { Cause, Effect, Option, Ref, Stream, type Scope } from "effect"
 import type { Interface as ConfigInterface } from "../config/service.js"
 import { update as updateConfig } from "../config/writer.js"
 import type { Interface as StorageInterface } from "../storage/service.js"
+import { makeKeyCoalescer } from "./coalesce.js"
 import { checkGoalCommand, registerCommands } from "./commands.js"
 import {
   applySubagentPermissionDecision,
@@ -58,6 +59,13 @@ export interface MeshDeps {
 const SUBAGENT_TOOL = "subagent"
 const DEBUG_MESH = process.env.BANYANCODE_DEBUG === "mesh"
 
+/**
+ * `status.updated` coalescing window. A turn emits several session events per
+ * token, and each one used to rebuild and push a whole tree; batching to 250 ms
+ * caps the pushes at 4 Hz while the trailing edge carries the final state.
+ */
+const STATUS_COALESCE = "250 millis"
+
 const SESSION_EVENT_TYPES = [
   "session.created",
   "session.deleted",
@@ -66,7 +74,6 @@ const SESSION_EVENT_TYPES = [
   "session.execution.succeeded",
   "session.execution.failed",
   "session.execution.interrupted",
-  "session.usage.updated",
   "session.renamed",
   "session.agent.selected",
   "session.model.selected",
@@ -285,6 +292,29 @@ export const register = (ctx: Context, deps: MeshDeps): Effect.Effect<void, neve
     yield* Ref.set(emitter, emitStatusFor(mesh, rpc))
     const cache = yield* Ref.make<ReadonlyMap<string, MeshSessionSnapshot>>(new Map())
 
+    // `status.updated` carries a whole tree, so a burst of session events must not
+    // fan out into a burst of tree rebuilds and pushes. Dirty sessions are
+    // collected by the coalescer and flushed at most once per window; the flush
+    // always reads the latest snapshot, so the last state of a burst is the one
+    // that ships (trailing edge).
+    const statuses = yield* makeKeyCoalescer({
+      window: STATUS_COALESCE,
+      flush: (pending) =>
+        Effect.gen(function* () {
+          const roots = new Map<string, string>()
+          for (const sessionID of pending) {
+            const snapshot = yield* sessions.get(sessionID)
+            if (snapshot !== undefined) yield* Ref.update(cache, (current) => upsertSnapshot(current, snapshot))
+            const map = yield* Ref.get(cache)
+            const root = rootOf(map, sessionID) ?? sessionID
+            roots.set(root, root)
+          }
+          for (const root of roots.values()) {
+            yield* emitStatus(rpc, yield* Ref.get(cache), root, yield* Ref.get(mesh.live), yield* Ref.get(mesh.killed))
+          }
+        }),
+    })
+
     yield* ctx.event
       .subscribe({ types: [...SESSION_EVENT_TYPES] })
       .pipe(
@@ -294,12 +324,14 @@ export const register = (ctx: Context, deps: MeshDeps): Effect.Effect<void, neve
           const sessionID = (event.data as { sessionID?: unknown }).sessionID
           if (typeof sessionID !== "string") return Effect.void
           const handler = Effect.gen(function* () {
-            const current = yield* Ref.get(cache)
             if (type === "session.deleted") {
+              const current = yield* Ref.get(cache)
               const root = rootOf(current, sessionID) ?? sessionID
               const next = removeSnapshot(current, sessionID)
               yield* Ref.set(cache, next)
               yield* slots.releaseChild(sessionID)
+              // A deletion can never be undone, and the surviving tree is small:
+              // send it now instead of waiting for the coalescing window.
               yield* emitStatus(rpc, next, root, yield* Ref.get(mesh.live), yield* Ref.get(mesh.killed))
               return
             }
@@ -330,17 +362,7 @@ export const register = (ctx: Context, deps: MeshDeps): Effect.Effect<void, neve
               })
               yield* slots.releaseChild(sessionID)
             }
-            const snapshot = yield* sessions.get(sessionID)
-            if (snapshot === undefined) return
-            const next = upsertSnapshot(yield* Ref.get(cache), snapshot)
-            yield* Ref.set(cache, next)
-            yield* emitStatus(
-              rpc,
-              next,
-              rootOf(next, sessionID) ?? sessionID,
-              yield* Ref.get(mesh.live),
-              yield* Ref.get(mesh.killed),
-            )
+            yield* statuses.mark(sessionID)
           })
           return handler.pipe(
             Effect.catchCause((cause) =>
