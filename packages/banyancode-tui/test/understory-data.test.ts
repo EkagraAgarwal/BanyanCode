@@ -689,6 +689,23 @@ test("history truncation is exposed per session, never for the root", () => {
   })
   expect(rows[1]!.historyMayBeTruncated).toBe(true)
   expect(rows[0]!.historyMayBeTruncated).toBe(false)
+
+  // The host's cursor is authoritative once loaded: a long transcript whose
+  // last page has arrived is complete, and a short one with more left is not.
+  const complete = rosterRows({
+    root: "ses_root",
+    sessions: [root(), child({ id: "ses_a", agent: "coder", created: 100 })],
+    messages: (id) => (id === "ses_a" ? many : []),
+    more: () => false,
+  })
+  expect(complete[1]!.historyMayBeTruncated).toBe(false)
+  const paging = rosterRows({
+    root: "ses_root",
+    sessions: [root(), child({ id: "ses_a", agent: "coder", created: 100 })],
+    messages: (id) => (id === "ses_a" ? [userMessage("u", 1)] : []),
+    more: () => true,
+  })
+  expect(paging[1]!.historyMayBeTruncated).toBe(true)
 })
 
 test("runSheet shows branch tokens and returned summaries; agentSheet hides zero cost", () => {

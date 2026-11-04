@@ -12,6 +12,7 @@ import type { AgentSpan, StaleEdit } from "../src/data/understory-spans"
 import { rosterRows, type AgentSheet, type RosterRow } from "../src/data/understory"
 import { palette } from "../src/theme"
 import { mount } from "./harness"
+import { clickRegion, LENS_TABS, ROSTER } from "./fixture/click"
 import { fakeTimers, understoryFixture, type UnderstorySpec } from "./fixture/understory"
 
 const spec = (input: Partial<UnderstorySpec> & { readonly id: string }): UnderstorySpec => ({
@@ -118,7 +119,13 @@ async function renderInspector(overrides: Partial<InspectorProps> = {}) {
     animations: false,
     tick: 0,
     now: () => 10_000,
-    actions: ["s steer", "x kill", "↵ open session"],
+    actions: [
+      { id: "steer", label: "steer", run: () => {} },
+      { id: "kill", label: "kill", run: () => {} },
+      { id: "open", label: "open session", run: () => {} },
+    ],
+    onAnswer: () => {},
+    onOpenSession: () => {},
     file: undefined,
     graph: undefined,
     pinned: undefined,
@@ -341,14 +348,14 @@ test("a stale edit shows on both agents' sheets and clears when the reader re-re
 
   const app = await render(fixture, 168, 48)
   try {
-    fixture.press("Next agent")
+    clickRegion(app, ROSTER, "row:ses_writer")
     await app.renderOnce()
     expect(rowsOf(fixture)[1]?.label).toBe("coder-1")
     const first = app.captureCharFrame()
     expect(first).toContain("STALE EDIT")
     expect(first).toContain("steer coder-2")
 
-    fixture.press("Next agent")
+    clickRegion(app, ROSTER, "row:ses_reader")
     await app.renderOnce()
     expect(app.captureCharFrame()).toContain("STALE EDIT")
     expect(app.captureCharFrame()).toContain("steer coder-1")
@@ -418,7 +425,7 @@ test("the File sheet reads its tile, and says when the graph is not built", asyn
   }
 })
 
-test("the ask box's right border lines up at every width, including the key row", async () => {
+test("the ask box's right border lines up at every width, and every answer is a button", async () => {
   for (const width of [44, 34, 28]) {
     const app = await renderInspector({
       width,
@@ -428,14 +435,17 @@ test("the ask box's right border lines up at every width, including the key row"
       const lines = app.captureCharFrame().split("\n")
       const start = lines.findIndex((line) => line.includes("NEEDS YOU") && line.includes("╭"))
       expect(start).toBeGreaterThanOrEqual(0)
-      const box = lines.slice(start, start + 4).map((line) => Array.from(line.trimEnd()))
-      // Every row of the box, the key row included, is exactly as wide as the
-      // top border, so the right edge lands on one column for all of them.
+      // Top border, the ask, the bottom border: three rows of one width, so the
+      // right edge lands on one column for all of them.
+      const box = lines.slice(start, start + 3).map((line) => Array.from(line.trimEnd()))
       expect(new Set(box.map((cells) => cells.length)).size).toBe(1)
-      expect(lines[start + 2]).toContain("a ")
-      expect(lines[start + 2]).toContain("d deny")
-      // The body rows really carry the right border in that column.
-      for (const cells of box.slice(1, 3)) expect(cells[cells.length - 1]).toBe("│")
+      expect(lines[start + 1]).toContain("bash")
+      for (const cells of box.slice(1, 2)) expect(cells[cells.length - 1]).toBe("│")
+      // The answers sit on their own row as buttons, not as key hints.
+      const answers = lines[start + 3]!
+      expect(answers).toContain("allow")
+      expect(answers).toContain("always")
+      expect(answers).toContain("deny")
     } finally {
       app.renderer.destroy()
     }
@@ -488,8 +498,8 @@ test("the Agent sheet hides sections it has no data for and keeps the action row
     expect(frame).not.toContain("TOOLS")
     expect(frame).not.toContain("CHANGED")
     expect(frame).not.toContain("STALE EDIT")
-    expect(frame).toContain("s steer")
-    expect(frame).toContain("x kill")
+    expect(frame).toContain("steer")
+    expect(frame).toContain("kill")
     expect(frame).toContain("open session")
     const lines = frame.replace(/\n$/, "").split("\n")
     const action = lines.findIndex((line) => line.includes("open session"))
@@ -530,7 +540,7 @@ test("animations off draws the inspector overlay without a spring timer", async 
   const fixture = understoryFixture({ specs: many(2), animations: false })
   const app = await render(fixture, 120, 40)
   try {
-    expect(fixture.press("Toggle inspector overlay")).toBe(true)
+    expect(await clickRegion(app, LENS_TABS, "lens:details")).toBe(true)
     await app.renderOnce()
     expect(app.captureCharFrame()).toContain("TOKENS BY BRANCH")
   } finally {

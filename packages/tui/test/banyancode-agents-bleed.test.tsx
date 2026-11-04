@@ -163,13 +163,17 @@ for (const item of cases) {
     // No gutter: the composer's own border is all that is left of the inset.
     expect(composerLeft(setup.captureCharFrame())).toBeLessThan(2)
 
-    // The canopy chrome replaces the layout's own, whatever session_layout says.
+    // The chrome follows session_layout, exactly as it does on every other
+    // tab: the Agents tab neither swaps the header nor the footer.
     const frame = setup.captureCharFrame()
-    expect(frame.split("\n").some((line) => line.includes("━"))).toBe(true)
     expect(frame).not.toContain("need attention")
     if (item.layout === "classic") {
-      expect(frame).not.toContain("BANYANCODE")
+      expect(frame).toContain("BANYANCODE")
+      expect(frame.split("\n").some((line) => line.includes("━"))).toBe(false)
+      expect(frame).toContain("ctrl+p commands ctrl+] tabs")
+    } else {
       expect(frame).toContain("banyancode")
+      expect(frame.split("\n").some((line) => line.includes("━"))).toBe(true)
     }
 
     // Back on SESSIONS the side columns return: only the Agents tab bleeds.
@@ -189,6 +193,7 @@ for (const item of cases) {
     expect(box(setup, "session-pane")?.width).toBe(chatWidth)
     expect(composerLeft(setup.captureCharFrame())).toBeGreaterThanOrEqual(2)
     expect(setup.captureCharFrame()).toContain(item.layout === "classic" ? "BANYANCODE" : "banyancode")
+    if (item.layout === "classic") expect(setup.captureCharFrame()).toContain("ctrl+p commands ctrl+] tabs")
   })
 }
 
@@ -221,17 +226,19 @@ for (const size of [
       expect(agents.lines[agents.top + 2]!.slice(1, -1).trim()).toBe("")
       expect(agents.lines[agents.top + 3]).toMatch(/Build|Plan/)
     }
-    // One row under the composer, and it is the status row: no second hint row.
+    // One row under the composer, and it is the status row: the same hint the
+    // other tabs show, and no key list of its own.
     expect(agents.lines[agents.bottom + 1]).toContain("· Git: dev")
-    if (size.width >= 120) expect(agents.lines[agents.bottom + 1]).toContain("1-3 lens")
-    expect(agents.lines[agents.bottom + 1]).toContain("w next")
-    expect(agents.lines[agents.bottom + 1]).not.toContain("commands")
+    if (size.width >= 120) expect(agents.lines[agents.bottom + 1]).toContain("^p cmd · / search")
+    for (const gone of ["1-3 lens", "w next", "? keys", "i inspector"]) {
+      expect(agents.lines[agents.bottom + 1]).not.toContain(gone)
+    }
 
-    // Every released row reaches the panel: 48 - 3 chrome - 5 composer - 1
-    // status = 39, and the lens keeps the rest under its tabs.
+    // Every released row reaches the panel: 48 - 5 chrome - 5 composer - 1
+    // status = 37, and the lens keeps the rest under its tabs.
     if (size.height === 48) {
-      expect(box(setup, "banyancode.understory.roster")?.height).toBe(39)
-      expect(box(setup, "banyancode.understory.trace")?.height).toBe(38)
+      expect(box(setup, "banyancode.understory.roster")?.height).toBe(37)
+      expect(box(setup, "banyancode.understory.trace")?.height).toBe(36)
     }
 
     // Back on CHAT the bottom rows are byte for byte what they were.

@@ -159,6 +159,8 @@ export interface RosterInput {
   readonly status?: ((sessionID: string) => "running" | "idle") | undefined
   /** Loaded messages, needed only to derive `blocked`. */
   readonly messages?: ((sessionID: string) => readonly SessionMessageInfo[]) | undefined
+  /** True while the host still has an older page for that session. */
+  readonly more?: ((sessionID: string) => boolean | undefined) | undefined
 }
 
 const EMPTY_SET: ReadonlySet<string> = new Set<string>()
@@ -398,7 +400,9 @@ export function rosterRows(input: RosterInput): RosterRow[] {
       // the one clock that never moves.
       startedAt: session.time.created,
       ...(endedAt === undefined ? {} : { endedAt }),
-      historyMayBeTruncated: mayBeTruncated(messagesOf(session.id), { root }),
+      // The cursor is authoritative when the host exposes it: a session with no
+      // older page left is complete even if it is longer than one page.
+      historyMayBeTruncated: input.more?.(session.id) ?? mayBeTruncated(messagesOf(session.id), { root }),
       hasChildren: (rowChildren.get(session.id) ?? []).length > 0,
     }
   })

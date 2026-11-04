@@ -124,9 +124,16 @@ export function rowGeometry(rows: number, agents: number): RowGeometry {
 export const TRACE_SECONDS_PER_COLUMN = 0.7
 export const TRACE_SCALE_MIN = 0.1
 export const TRACE_SCALE_MAX = 4
-/** Live paging: forward 30% of the window when the now line reaches 90%. */
+/** A page is 30% of the window; the key scroll uses one page. */
 export const PAGE_FRACTION = 0.3
+/** Kept for the old clock-paging helper's tests; the live lens no longer uses it. */
 export const PAGE_TRIGGER = 0.9
+/** Breathing room kept to the right of the newest event while following. */
+export const FOLLOW_MARGIN_COLUMNS = 2
+/** A wheel notch scrolls 10% of the visible time. */
+export const WHEEL_FRACTION = 0.1
+/** How near the left edge an old span triggers one older page. */
+export const HISTORY_LOAD_FRACTION = 0.2
 
 export interface TraceWindow {
   readonly a: number
@@ -168,6 +175,68 @@ export function traceWindow(input: TraceWindowInput): TraceWindow {
   const pages = input.now > from + lead ? Math.ceil((input.now - from - lead) / step) : 0
   const a = from + pages * step
   return { a, b: a + span, scale }
+}
+
+/** The time width of one column of breathing room, in milliseconds. */
+export function followMargin(scale: number): number {
+  return Math.max(0, FOLLOW_MARGIN_COLUMNS * Math.max(TRACE_SCALE_MIN, scale) * 1000)
+}
+
+export interface FollowWindowInput {
+  /** Run start; the window never shows earlier. */
+  readonly start: number
+  /** Newest event any loaded lane has. The window's right edge tracks it. */
+  readonly newest: number
+  readonly columns: number
+  /** Seconds per column; `TRACE_SECONDS_PER_COLUMN` unless zoomed. */
+  readonly scale: number
+  /** The window start from the previous frame; omitted on the first one. */
+  readonly anchor?: number | undefined
+}
+
+/**
+ * The live window follows events, never the clock. The newest event owns the
+ * right edge with one small margin of breathing room. A first frame puts that
+ * edge in place; later frames move only when an event passes the right edge,
+ * and then by the minimum that restores the margin, so history stays still
+ * while nothing happens.
+ */
+export function followWindow(input: FollowWindowInput): TraceWindow {
+  const columns = Math.max(1, Math.floor(input.columns))
+  const scale = Math.max(TRACE_SCALE_MIN, input.scale)
+  const span = columns * scale * 1000
+  const margin = Math.min(span / 2, followMargin(scale))
+  const start = input.start
+  const newest = Math.max(start, input.newest)
+  const right = newest + margin
+  const a = Math.max(start, right - span)
+  if (input.anchor !== undefined && newest <= input.anchor + span) {
+    return { a: input.anchor, b: input.anchor + span, scale }
+  }
+  return { a, b: a + span, scale }
+}
+
+export interface ScrollWindowInput {
+  readonly window: TraceWindow
+  readonly start: number
+  readonly newest: number
+  /** Fraction of the visible width to move; negative goes back in time. */
+  readonly fraction: number
+}
+
+/**
+ * Move an explicit window by a fraction of its width, clamped to the run: the
+ * first span is the floor and the newest event plus its margin is the ceiling.
+ * Reaching the ceiling means the view is following again.
+ */
+export function scrollWindow(input: ScrollWindowInput): { readonly window: TraceWindow; readonly following: boolean } {
+  const span = Math.max(1, input.window.b - input.window.a)
+  const margin = followMargin(input.window.scale)
+  const ceiling = Math.max(input.start, Math.max(input.start, input.newest) + margin)
+  const maxA = Math.max(input.start, ceiling - span)
+  const a = Math.max(input.start, Math.min(maxA, input.window.a + input.fraction * span))
+  const next = { a, b: a + span, scale: input.window.scale }
+  return { window: next, following: a >= maxA - 0.5 }
 }
 
 /** `+` halves the seconds per column (zoom in); `-` doubles it. */

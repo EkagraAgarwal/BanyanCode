@@ -122,7 +122,7 @@ export function drawRoots(grid: Grid, frame: RootsFrame, theme: Palette): void {
   for (const head of frame.layout.heads) {
     const { x, y, w } = head.rect
     grid.fill(x, y, w, 1, theme.background)
-    const label = frame.mapRoot === undefined ? head.name : `‹ ${head.name}`
+    const label = frame.mapRoot === undefined ? head.name : `‹ back`
     grid.text(x, y, fit(label, w - 1), theme.wood, theme.background, true)
     grid.hit(x, y, w, 1, `pkg:${head.name}`)
   }
@@ -333,5 +333,5 @@ function drawLegend(grid: Grid, frame: RootsFrame, theme: Palette): void {
     if (at < grid.width) grid.text(at, y, fit("/codegraph-build", grid.width - at), theme.faint)
     return
   }
-  if (grid.width >= 60) grid.right(grid.width - 1, y, "click a tile · b blast radius", theme.faint)
+  if (grid.width >= 60) grid.right(grid.width - 1, y, "click a tile", theme.faint)
 }

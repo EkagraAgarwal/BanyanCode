@@ -174,7 +174,13 @@ function inspectorProps(theme: Palette): InspectorProps {
     animations: false,
     tick: 0,
     now: () => NOW,
-    actions: ["s steer", "x kill", "↵ open session"],
+    actions: [
+      { id: "steer", label: "steer", run: () => {} },
+      { id: "kill", label: "kill", run: () => {} },
+      { id: "open", label: "open session", run: () => {} },
+    ],
+    onAnswer: () => {},
+    onOpenSession: () => {},
     file: undefined,
     graph: undefined,
     pinned: undefined,
@@ -235,7 +241,7 @@ for (const item of THEMES) {
       {
         name: "stream",
         width: 90,
-        render: () => <StreamLens {...lensProps(p)} following={true} top={0} onScroll={() => {}} />,
+        render: () => <StreamLens {...lensProps(p)} following={true} top={0} onFilter={() => {}} onScroll={() => {}} />,
         says: "postinstall",
       },
       { name: "inspector", width: 44, render: () => <Inspector {...inspectorProps(p)} />, says: "NEEDS YOU" },

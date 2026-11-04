@@ -1,4 +1,5 @@
 import type { RGBA } from "@opentui/core"
+import { createSignal } from "solid-js"
 import { formatTokens, truncate } from "../../data/format"
 import { shortLabel, stateGlyph, type RosterRow } from "../../data/understory"
 import { gauss, mix } from "../../motion"
@@ -76,6 +77,10 @@ export interface RosterProps {
   /** Rows each lane takes; the roster draws exactly this many per agent. */
   readonly laneHeight: number
   readonly onSelect: (sessionID: string) => void
+  /** Open one agent's session: the row's `open` chip, or a double click. */
+  readonly onOpen: (sessionID: string) => void
+  /** Fold or unfold the finished branches. */
+  readonly onFold: () => void
   /** Wheel steps in rows, so the roster and the lanes scroll together. */
   readonly onScroll: (delta: number) => void
 }
@@ -86,7 +91,9 @@ export interface RosterProps {
  * roster row and its lane read across.
  */
 export function Roster(props: RosterProps) {
+  const [hover, setHover] = createSignal<string>()
   const hueOf = (sessionID: string): RGBA => props.hues.get(sessionID) ?? props.theme.leaf
+  let lastClick: { readonly sessionID: string; readonly at: number } | undefined
 
   // A prefix segment is two columns: a rail column and a connector column.
   const topOf = (segment: string): string => (segment === "├─" ? "├╴" : segment === "╰─" ? "╰╴" : segment)
@@ -183,7 +190,18 @@ export function Roster(props: RosterProps) {
       const glyph = rowGlyph(row, absolute, props.tick, props.animations)
       grid.setCell(gx, y, glyph, rowColor(row, theme, props.tick, props.animations), rowBg, true)
       const nameX = gx + 2
-      const xEnd = width - 1
+      // The selected row carries the visible `open` affordance: one mouse
+      // target instead of a key. It takes the last four columns, and the row's
+      // own numbers shift left by that much so nothing overlaps.
+      const openChip = selected && width >= 24 ? "open" : ""
+      const xEnd = width - 1 - (openChip === "" ? 0 : openChip.length + 1)
+      if (openChip !== "") {
+        const openX = width - openChip.length
+        const tone =
+          hover() === `open:${row.sessionID}` ? mix(theme.primary, theme.text, 0.5) : theme.primary
+        grid.text(openX, y, openChip, tone, rowBg, true)
+        grid.hit(openX, y, openChip.length, textLines, `open:${row.sessionID}`)
+      }
       const nameColor =
         row.depth === 0
           ? theme.text
@@ -252,19 +270,24 @@ export function Roster(props: RosterProps) {
     // --- the reserved rows under the list -----------------------------------
     const below = header + window.count * lane
     const last = Math.max(0, props.height - 1)
+    const done = props.rows.filter((row) => row.state === "done").length
+    const foldTone = hover() === "fold" ? theme.text : theme.done
     if (props.folded && props.hidden > 0) {
       const foldY = Math.min(below, header + area - 1)
       if (foldY >= header) {
-        grid.text(1, foldY, `✓ ${props.hidden} done`, theme.done)
-        grid.right(width - 1, foldY, "z show", theme.faint)
+        grid.text(1, foldY, `✓ ${props.hidden} done`, foldTone)
+        grid.right(width - 1, foldY, "show", hover() === "fold" ? theme.text : theme.faint)
+        grid.hit(0, foldY, width, 1, "fold")
       }
     }
     if (window.overflow) {
       grid.text(1, Math.min(below, last), `↓ ${window.more} more`, theme.faint)
-    } else if (!props.folded && below <= last && width >= 16 && props.rows.some((row) => row.state === "done")) {
-      // The mockup's fold hint owns the roster's last row, level with the
-      // lens legend; only a full list or a narrow roster displaces it.
-      grid.text(1, last, "z fold finished", theme.faint)
+    } else if (below <= last && width >= 18 && done > 0 && !props.folded) {
+      // The mockup's fold control owns the roster's last row, level with the
+      // lens legend; it appears only while there is something to fold.
+      grid.text(1, last, `✓ ${done} done`, foldTone)
+      grid.right(width - 1, last, "show done", hover() === "fold" ? theme.text : theme.faint)
+      grid.hit(0, last, width, 1, "fold")
     }
   }
 
@@ -277,7 +300,27 @@ export function Roster(props: RosterProps) {
         background={props.theme.background}
         draw={draw}
         onHit={(region) => {
-          if (region.startsWith("row:")) props.onSelect(region.slice("row:".length))
+          if (region === "fold") {
+            props.onFold()
+            return
+          }
+          if (region.startsWith("open:")) {
+            props.onOpen(region.slice("open:".length))
+            return
+          }
+          if (!region.startsWith("row:")) return
+          const sessionID = region.slice("row:".length)
+          const now = Date.now()
+          const double = lastClick !== undefined && lastClick.sessionID === sessionID && now - lastClick.at < 400
+          lastClick = { sessionID, at: now }
+          if (double) {
+            props.onOpen(sessionID)
+            return
+          }
+          props.onSelect(sessionID)
+        }}
+        onMouseMove={(region) => {
+          if (region !== hover()) setHover(region)
         }}
         onScroll={(direction, delta) => {
           if (direction === "left" || direction === "right") return

@@ -74,7 +74,7 @@ export function composerRouteLabel(
   rows: readonly RosterRow[],
   live: boolean,
 ): ComposerRoute | undefined {
-  if (!live) return { text: "replaying: l returns to live", tone: "warning" }
+  if (!live) return { text: "replaying: back to live first", tone: "warning" }
   const root = rows.find((row) => row.depth === 0)
   const home = root === undefined ? "the root agent" : root.label
   const destination = composerDestination(text, rows)
@@ -134,7 +134,7 @@ export interface ComposerSendInput {
  */
 export async function sendComposer(input: ComposerSendInput): Promise<ComposerInterceptResult | undefined> {
   if (!input.live) {
-    input.tell("Replaying: press l to return to live before sending", "warning")
+    input.tell("Replaying: go back to live before sending", "warning")
     return { handled: true, retain: true }
   }
   const destination = composerDestination(input.text, input.rows)

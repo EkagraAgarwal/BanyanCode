@@ -1,19 +1,20 @@
 import { expect, test } from "bun:test"
 import {
   columnAt,
+  followMargin,
+  followWindow,
   headerRows,
   overviewRows,
-  PAGE_FRACTION,
-  PAGE_TRIGGER,
   rowGeometry,
   rosterAreaRows,
+  scrollWindow,
   TRACE_SCALE_MAX,
   TRACE_SCALE_MIN,
   TRACE_SECONDS_PER_COLUMN,
   traceWindow,
   zoomScale,
 } from "../src/components/understory/layout"
-import { createUnderstoryView, LENSES, lensForKey, lensLabel } from "../src/components/understory/view"
+import { createUnderstoryView, LENSES, lensLabel } from "../src/components/understory/view"
 
 test("header rows follow the brief's three tiers", () => {
   expect(overviewRows(55)).toBe(3)
@@ -69,28 +70,53 @@ test("the roster and the lanes read the same header height", () => {
   }
 })
 
-test("a live window keeps a fixed scale and pages forward in 30% steps", () => {
+test("the live window follows events, never the clock", () => {
   const columns = 100
   const start = 0
-  const span = columns * TRACE_SECONDS_PER_COLUMN
-  expect(span).toBe(70)
+  const scale = TRACE_SECONDS_PER_COLUMN
+  const span = columns * scale * 1000
+  const margin = followMargin(scale)
 
-  const first = traceWindow({ start, now: 10, columns })
-  expect(first.a).toBe(0)
-  expect(first.b).toBe(70)
-  expect(first.scale).toBe(TRACE_SECONDS_PER_COLUMN)
+  // A run shorter than the window starts at its first span.
+  const short = followWindow({ start, newest: 10_000, columns, scale })
+  expect(short.a).toBe(0)
+  expect(short.b).toBeCloseTo(span, 6)
 
-  // History stays still until the now line reaches 90% of the window.
-  const boundary = traceWindow({ start, now: span * PAGE_TRIGGER - 0.01, columns })
-  expect(boundary.a).toBe(0)
+  // Once the run is longer than the window, the newest event owns the right
+  // edge with its margin.
+  const first = followWindow({ start, newest: 90_000, columns, scale })
+  expect(first.b).toBeCloseTo(90_000 + margin, 6)
+  expect(first.a).toBeCloseTo(first.b - span, 6)
 
-  // Past that, the window steps forward by 30% of its width and no further.
-  const paged = traceWindow({ start, now: span * PAGE_TRIGGER + 0.01, columns })
-  expect(paged.a).toBeCloseTo(span * PAGE_FRACTION, 6)
-  expect(paged.b - paged.a).toBe(span)
+  // Nothing new: the same anchor is returned, even if the clock has advanced.
+  const still = followWindow({ start, newest: 10_000, columns, scale, anchor: first.a })
+  expect(still.a).toBe(first.a)
+  expect(still.b).toBe(first.b)
 
-  const far = traceWindow({ start, now: span * (PAGE_TRIGGER + PAGE_FRACTION * 2.5), columns })
-  expect(far.a).toBeCloseTo(span * PAGE_FRACTION * 3, 6)
+  // An event inside the window still does not move it.
+  const inside = followWindow({ start, newest: first.b - 1, columns, scale, anchor: first.a })
+  expect(inside.a).toBe(first.a)
+
+  // An event past the edge moves it just enough to restore the margin.
+  const moved = followWindow({ start, newest: first.b + 5_000, columns, scale, anchor: first.a })
+  expect(moved.b).toBeCloseTo(first.b + 5_000 + margin, 6)
+  expect(moved.a).toBeCloseTo(first.a + 5_000 + margin, 6)
+})
+
+test("a manual scroll is clamped to the run and resumes at the newest edge", () => {
+  const scale = TRACE_SECONDS_PER_COLUMN
+  const window = { a: 0, b: 70_000, scale }
+  // Scrolling left from the start cannot go past the first span.
+  const back = scrollWindow({ window, start: 0, newest: 90_000, fraction: -1 })
+  expect(back.window.a).toBe(0)
+  // The ceiling is the newest event plus its margin.
+  const forward = scrollWindow({ window, start: 0, newest: 90_000, fraction: 1 })
+  expect(forward.window.b).toBeCloseTo(90_000 + followMargin(scale), 6)
+  expect(forward.following).toBe(true)
+  // A window that lands before the ceiling has paused following.
+  const paused = scrollWindow({ window, start: 0, newest: 200_000, fraction: 1 })
+  expect(paused.window.a).toBe(70_000)
+  expect(paused.following).toBe(false)
 })
 
 test("an ended run fits the whole run into the columns", () => {
@@ -132,7 +158,7 @@ test("the view holds the lens, the playhead and the lens-only controls", () => {
   const window = view.window({ start: 0, columns: 100 })
   expect(window.b - window.a).toBeCloseTo(70_000, 6)
   expect(window.a).toBeLessThanOrEqual(1_500)
-  expect(1_500).toBeLessThanOrEqual(window.a + (window.b - window.a) * PAGE_TRIGGER)
+  expect(1_500).toBeLessThanOrEqual(window.b)
 
   view.setT(undefined)
   expect(view.live()).toBe(true)
@@ -171,17 +197,45 @@ test("the view holds the lens, the playhead and the lens-only controls", () => {
   expect(view.file()).toBe("packages/cli/script/postinstall.mjs")
 })
 
+test("scrolling pauses follow, newer events never move a paused view, and latest resumes", () => {
+  const view = createUnderstoryView({ now: () => 500_000 })
+  const first = view.window({ start: 0, columns: 100, newest: 10_000 })
+  expect(view.following()).toBe(true)
+
+  // A scroll away pauses following and pins the explicit window.
+  view.scrollTime({ start: 0, newest: 100_000, fraction: -0.5 })
+  expect(view.following()).toBe(false)
+  const paused = view.window({ start: 0, columns: 100, newest: 100_000 })
+  expect(paused.a).toBe(0)
+  const afterEvent = view.window({ start: 0, columns: 100, newest: 400_000 })
+  expect(afterEvent.a).toBe(paused.a)
+  expect(afterEvent.b).toBe(paused.b)
+
+  // Scrolling forward to the newest edge resumes following.
+  view.scrollTime({ start: 0, newest: 100_000, fraction: 2 })
+  expect(view.following()).toBe(true)
+
+  // `latest` also resumes and clears the explicit window.
+  view.scrollTime({ start: 0, newest: 100_000, fraction: -0.4 })
+  expect(view.following()).toBe(false)
+  view.latest()
+  expect(view.following()).toBe(true)
+  expect(view.win()).toBeUndefined()
+  const resumed = view.window({ start: 0, columns: 100, newest: 100_000 })
+  expect(resumed.b).toBeCloseTo(100_000 + followMargin(TRACE_SECONDS_PER_COLUMN), 6)
+
+  // A replay moves only the playhead: the window holds until it leaves.
+  view.setT(40_000)
+  const held = view.window({ start: 0, columns: 100, newest: 100_000 })
+  expect(held.a).toBe(resumed.a)
+  view.setT(1_000)
+  const followed = view.window({ start: 0, columns: 100, newest: 100_000 })
+  expect(followed.a).toBeLessThan(held.a)
+  expect(followed.a).toBeLessThanOrEqual(1_000)
+  expect(first.b).toBeGreaterThan(first.a)
+})
+
 test("every lens is labelled for the tab strip", () => {
   expect(LENSES.map(lensLabel)).toEqual(["Trace", "Roots", "Stream"])
 })
 
-test("only a real digit press names a lens", () => {
-  // `@opentui/keymap` can match a bare digit for a key that is not one (the
-  // base-layout fallback), so the lens commands check the event's own name.
-  expect(lensForKey("1")).toBe("trace")
-  expect(lensForKey("2")).toBe("roots")
-  expect(lensForKey("3")).toBe("stream")
-  expect(lensForKey("]")).toBeUndefined()
-  expect(lensForKey("escape")).toBeUndefined()
-  expect(lensForKey(undefined)).toBeUndefined()
-})

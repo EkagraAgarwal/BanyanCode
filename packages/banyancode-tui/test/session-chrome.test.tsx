@@ -383,42 +383,64 @@ function onPanel(name: string): Context {
   } as unknown as Context
 }
 
-test("the Agents tab wears the canopy chrome even in the classic layout", async () => {
-  const agents = onPanel(PANEL.agents)
-  const header = await renderHeader({ width: 160, ctx: agents })
+test("the Agents tab wears exactly the classic chrome Chat wears", async () => {
+  const chat = await renderHeader({ width: 160, ctx: idle })
+  const agents = await renderHeader({ width: 160, ctx: onPanel(PANEL.agents) })
   try {
-    const [row0, canopy] = lines(header)
-    // Brand and tabs share row 0, then the canopy rule: no v1 tab row.
-    expect(row0).toContain("banyancode")
-    for (const label of ["CHAT", "SESSIONS", "AGENTS", "CONFIG"]) expect(row0).toContain(label)
-    expect(row0).not.toContain("BANYANCODE")
-    expect(canopy!.replace(/[─━\s]/g, "")).toBe("")
-    expect(canopy).toContain("━")
-    expect(header.captureCharFrame()).not.toContain("ctrl+p commands ctrl+] tabs")
+    // Same rows, same columns: brand, labels and the rule are byte-identical,
+    // and only the active tab's own underline moves.
+    const [agentBrand, agentTabs, agentUnderline, agentRule] = lines(agents)
+    const [chatBrand, chatTabs, chatUnderline, chatRule] = lines(chat)
+    expect(agentBrand).toBe(chatBrand)
+    expect(agentTabs).toBe(chatTabs)
+    expect(agentRule).toBe(chatRule)
+    expect(agentUnderline).not.toBe(chatUnderline)
+    expect(lines(agents)[0]).toContain("BANYANCODE")
+    expect(lines(agents)[1]).toContain("AGENTS")
+    expect(agents.captureCharFrame()).not.toContain("━")
+    expect(agents.captureCharFrame()).not.toContain("⣴⣿⣦")
+    // The full-bleed panel keeps five composer rows; the chrome is three rows
+    // in the classic layout, exactly as on Chat.
   } finally {
-    header.renderer.destroy()
+    chat.renderer.destroy()
+    agents.renderer.destroy()
   }
-  const footer = await renderFooter({ width: 120, ctx: agents })
+
+  const chatFooter = await renderFooter({ width: 120, ctx: idle })
+  const agentsFooter = await renderFooter({ width: 120, ctx: onPanel(PANEL.agents) })
   try {
-    // The tab hands its status row to the footer: what needs you, then hints.
+    // At zero the Agents tab says nothing: the panel's own status row already
+    // carries what needs you, and it names the agent when there is one.
+    const quiet = agentsFooter.captureCharFrame()
+    expect(quiet).toContain("workspace · Git: v2-base")
+    expect(quiet).not.toContain("need attention")
+    expect(quiet).toContain("^p cmd · / search")
+    expect(chatFooter.captureCharFrame()).toContain("▲ 0 need attention")
+
+    let picked = 0
     setAgentsStatus({
-      text: "▲ coder-1 needs you: npm pack --dry-run · a allow",
+      text: "▲ coder-1 needs you: npm pack --dry-run",
       tone: "warning",
-      hints: ["1-3 lens", "w next", "? keys"],
+      hints: [],
+      onAttention: () => {
+        picked += 1
+      },
     })
-    await footer.renderOnce()
-    const frame = footer.captureCharFrame()
-    expect(frame).toContain("workspace · Git: v2-base")
-    expect(frame).toContain("▲ coder-1 needs you: npm pack --dry-run · a allow")
-    expect(frame).toContain("1-3 lens · w next · ? keys")
-    // The classic "▲ 0 need attention" is not part of the canopy chrome.
+    await agentsFooter.renderOnce()
+    const frame = agentsFooter.captureCharFrame()
+    expect(frame).toContain("▲ coder-1 needs you: npm pack --dry-run")
     expect(frame).not.toContain("need attention")
+    // The message is a target, not a hint: clicking it picks that agent.
+    const line = frame.split("\n").findIndex((value) => value.includes("coder-1 needs you"))
+    const column = frame.split("\n")[line]!.indexOf("▲")
+    await agentsFooter.mockMouse.click(column + 2, line)
+    expect(picked).toBe(1)
   } finally {
     setAgentsStatus(undefined)
-    footer.renderer.destroy()
+    chatFooter.renderer.destroy()
+    agentsFooter.renderer.destroy()
   }
 })
-
 test("Sessions, Config and Chat keep the classic chrome", async () => {
   for (const name of [PANEL.sessions, PANEL.config]) {
     const app = await renderHeader({ width: 160, ctx: onPanel(name) })

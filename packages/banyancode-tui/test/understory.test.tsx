@@ -10,6 +10,7 @@ import { shortLabel } from "../src/data/understory"
 import { rowGeometry } from "../src/components/understory/layout"
 import { understoryColumns } from "../src/understory"
 import { live, mount } from "./harness"
+import { clickRegion, INSPECTOR_ACTIONS, INSPECTOR_ASK, LENS_TABS, ROSTER, STREAM_HEADER } from "./fixture/click"
 import { agentsStatus } from "../src/data/agents-status"
 import {
   fakeTimers,
@@ -90,8 +91,8 @@ interface RenderOptions {
   readonly height: number
   readonly clock?: ReturnType<typeof fakeTimers>
   readonly ticker?: ReturnType<typeof createTicker>
-  /** Command to run after mounting; the stream by default, `null` for Trace. */
-  readonly lens?: string | null
+  /** Lens to click after mounting; the stream by default, `null` for Trace. */
+  readonly lens?: "trace" | "roots" | "stream" | null
 }
 
 async function render(fixture: ReturnType<typeof understoryFixture>, options: RenderOptions) {
@@ -111,8 +112,8 @@ async function render(fixture: ReturnType<typeof understoryFixture>, options: Re
   )
   await app.renderOnce()
   // Trace is the default lens; these tests cover the rest of the screen, so
-  // they start from the stream unless a caller keeps the default.
-  if (options.lens !== null) fixture.press(options.lens ?? "Stream lens")
+  // they click the stream tab unless a caller keeps the default.
+  if (options.lens !== null) clickRegion(app, LENS_TABS, `lens:${options.lens ?? "stream"}`)
   await app.renderOnce()
   await app.renderOnce()
   return { app, clock }
@@ -168,7 +169,7 @@ test("the screen fits every reviewed size without wrapping", async () => {
       // The mockup drops the RUN row below 28 terminal rows; everything else fits.
       if (height >= 28) expect(text).toContain("RUN")
       else expect(text).toContain("BRCH")
-      expect(text).toContain("1 Trace")
+      expect(text).toContain("Trace")
     } finally {
       app.renderer.destroy()
     }
@@ -351,12 +352,12 @@ test("every state has a distinct glyph, and failed or killed never reads finishe
     expect(text).toContain("RUN")
     expect(text).toContain("failed !")
 
-    for (let step = 0; step < 4; step += 1) expect(fixture.press("Next agent")).toBe(true)
+    for (let step = 0; step < 4; step += 1) expect(fixture.press("Next row")).toBe(true)
     await app.renderOnce()
     expect(frame(app)).toContain("FAILED")
     expect(frame(app)).not.toContain("FINISHED")
 
-    expect(fixture.press("Next agent")).toBe(true)
+    expect(fixture.press("Next row")).toBe(true)
     await app.renderOnce()
     expect(frame(app)).toContain("KILLED")
     expect(frame(app)).not.toContain("FINISHED")
@@ -369,16 +370,16 @@ test("a waiting agent shows on the row and inspector, and clears when the reply 
   const fixture = understoryFixture({ specs: MIXED })
   const { app } = await render(fixture, { width: 200, height: 45 })
   try {
-    expect(fixture.press("Next waiting agent")).toBe(true)
+    expect(await clickRegion(app, ROSTER, "row:ses_c2")).toBe(true)
     await app.renderOnce()
     const waiting = frame(app)
     expect(waiting).toContain("▲")
     expect(waiting).toContain("NEEDS YOU")
-    expect(waiting).toContain("a allow once")
+    expect(waiting).toContain("allow once")
     expect(waiting).toContain("bash")
     expect(waiting).toContain("npm pack --dry-run")
 
-    expect(fixture.press("Allow once")).toBe(true)
+    expect(await clickRegion(app, INSPECTOR_ASK, "once")).toBe(true)
     await app.renderOnce()
     expect(fixture.replies).toHaveLength(1)
     expect(fixture.replies[0]).toEqual({
@@ -403,16 +404,15 @@ test("the allow keys never pick another agent, and several requests answer the o
   })
   const { app } = await render(fixture, { width: 200, height: 40 })
   try {
-    expect(fixture.press("Next agent")).toBe(true)
+    // Selecting a running branch shows no ask, so there is nothing to answer.
+    expect(fixture.press("Next row")).toBe(true)
     await app.renderOnce()
-    expect(fixture.press("Allow once")).toBe(true)
-    await app.renderOnce()
-    expect(fixture.replies).toHaveLength(0)
-    expect(statusText()).toBe("press w to jump to the next waiting agent")
+    expect(await clickRegion(app, INSPECTOR_ASK, "once")).toBe(false)
 
-    expect(fixture.press("Next waiting agent")).toBe(true)
+    // The waiting branch's ask answers its oldest request.
+    expect(await clickRegion(app, ROSTER, "row:ses_c2")).toBe(true)
     await app.renderOnce()
-    expect(fixture.press("Always allow")).toBe(true)
+    expect(await clickRegion(app, INSPECTOR_ASK, "always")).toBe(true)
     await app.renderOnce()
     expect(fixture.replies).toHaveLength(1)
     expect(fixture.replies[0]?.requestID).toBe("perm_ses_c2_0")
@@ -422,21 +422,23 @@ test("the allow keys never pick another agent, and several requests answer the o
   }
 })
 
-test("a question cannot be answered with a A d and says Enter opens the session", async () => {
+test("a question offers only open session, never an allow or deny", async () => {
   const fixture = understoryFixture({
     specs: [{ id: "ses_question", agent: "coder", title: "pick a registry", state: "waiting", question: true }],
   })
   const { app } = await render(fixture, { width: 200, height: 40 })
   try {
-    expect(fixture.press("Next waiting agent")).toBe(true)
+    expect(await clickRegion(app, ROSTER, "row:ses_question")).toBe(true)
     await app.renderOnce()
-    expect(frame(app)).toContain("QUESTION")
-    expect(frame(app)).toContain("Which registry?")
-    expect(frame(app)).toContain("Enter opens the session")
-    expect(fixture.press("Allow once")).toBe(true)
+    const asking = frame(app)
+    expect(asking).toContain("QUESTION")
+    expect(asking).toContain("Which registry?")
+    expect(asking).toContain("open session")
+    expect(await clickRegion(app, INSPECTOR_ASK, "once")).toBe(false)
+    expect(await clickRegion(app, INSPECTOR_ASK, "open")).toBe(true)
     await app.renderOnce()
     expect(fixture.replies).toHaveLength(0)
-    expect(statusText()).toBe("questions need Enter; open the session to answer")
+    expect(fixture.navigated).toEqual([{ type: "session", sessionID: "ses_question" }])
   } finally {
     app.renderer.destroy()
   }
@@ -447,13 +449,13 @@ test("x kills only on a second press within three seconds, and selection or the 
   const clock = fakeTimers()
   const { app } = await render(fixture, { width: 200, height: 45, clock })
   try {
-    expect(fixture.press("Next agent")).toBe(true)
-    expect(fixture.press("Kill selected agent")).toBe(true)
+    expect(fixture.press("Next row")).toBe(true)
+    expect(await clickRegion(app, INSPECTOR_ACTIONS, "kill")).toBe(true)
     await app.renderOnce()
-    expect(statusText()).toBe("press x again to kill coder-1")
+    expect(statusText()).toBe("kill coder-1? use kill again to confirm")
     expect(fixture.kills).toHaveLength(0)
 
-    expect(fixture.press("Kill selected agent")).toBe(true)
+    expect(await clickRegion(app, INSPECTOR_ACTIONS, "kill")).toBe(true)
     await app.renderOnce()
     expect(fixture.kills).toHaveLength(1)
     expect(fixture.kills[0]).toMatchObject({ parentSessionID: "ses_root", targetSessionID: "ses_c1" })
@@ -465,13 +467,13 @@ test("x kills only on a second press within three seconds, and selection or the 
   const secondClock = fakeTimers()
   const timedApp = await render(timed, { width: 200, height: 45, clock: secondClock })
   try {
-    expect(timed.press("Next agent")).toBe(true)
-    expect(timed.press("Kill selected agent")).toBe(true)
+    expect(timed.press("Next row")).toBe(true)
+    expect(await clickRegion(timedApp.app, INSPECTOR_ACTIONS, "kill")).toBe(true)
     secondClock.advance(3_000)
-    expect(timed.press("Kill selected agent")).toBe(true)
+    expect(await clickRegion(timedApp.app, INSPECTOR_ACTIONS, "kill")).toBe(true)
     await timedApp.app.renderOnce()
     expect(timed.kills).toHaveLength(0)
-    expect(statusText()).toBe("press x again to kill coder-1")
+    expect(statusText()).toBe("kill coder-1? use kill again to confirm")
   } finally {
     timedApp.app.renderer.destroy()
   }
@@ -479,13 +481,13 @@ test("x kills only on a second press within three seconds, and selection or the 
   const moved = understoryFixture({ specs: MIXED })
   const movedApp = await render(moved, { width: 200, height: 45 })
   try {
-    expect(moved.press("Next agent")).toBe(true)
-    expect(moved.press("Kill selected agent")).toBe(true)
-    expect(moved.press("Next agent")).toBe(true)
-    expect(moved.press("Kill selected agent")).toBe(true)
+    expect(moved.press("Next row")).toBe(true)
+    expect(await clickRegion(movedApp.app, INSPECTOR_ACTIONS, "kill")).toBe(true)
+    expect(moved.press("Next row")).toBe(true)
+    expect(await clickRegion(movedApp.app, INSPECTOR_ACTIONS, "kill")).toBe(true)
     await movedApp.app.renderOnce()
     expect(moved.kills).toHaveLength(0)
-    expect(statusText()).toBe("press x again to kill coder-2")
+    expect(statusText()).toBe("kill coder-2? use kill again to confirm")
   } finally {
     movedApp.app.renderer.destroy()
   }
@@ -495,8 +497,8 @@ test("the kill timer is cleared when the screen goes away", async () => {
   const fixture = understoryFixture({ specs: MIXED })
   const clock = fakeTimers()
   const { app } = await render(fixture, { width: 200, height: 45, clock })
-  expect(fixture.press("Next agent")).toBe(true)
-  expect(fixture.press("Kill selected agent")).toBe(true)
+  expect(fixture.press("Next row")).toBe(true)
+  expect(await clickRegion(app, INSPECTOR_ACTIONS, "kill")).toBe(true)
   expect(clock.count()).toBeGreaterThan(0)
   app.renderer.destroy()
   expect(clock.count()).toBe(0)
@@ -506,11 +508,11 @@ test("composer focus keeps every panel key in the composer", async () => {
   const fixture = understoryFixture({ specs: MIXED })
   const { app } = await render(fixture, { width: 200, height: 45 })
   try {
-    expect(fixture.press("Next waiting agent")).toBe(true)
+    expect(await clickRegion(app, ROSTER, "row:ses_c2")).toBe(true)
     fixture.setMode("base")
-    expect(fixture.press("Allow once")).toBe(false)
-    expect(fixture.press("Next agent")).toBe(false)
-    expect(fixture.press("Kill selected agent")).toBe(false)
+    // While the composer owns the keyboard no panel command is reachable.
+    expect(fixture.press("Next row")).toBe(false)
+    expect(fixture.press("Open agent session")).toBe(false)
     await app.renderOnce()
     expect(fixture.replies).toHaveLength(0)
     expect(fixture.kills).toHaveLength(0)
@@ -535,12 +537,14 @@ test("escape backs out one level and only then reaches the panel close", async (
       },
     ],
   })
-  const { app } = await render(fixture, { width: 120, height: 40 })
+  // Wide enough for the docked inspector, so the action row is on screen; the
+  // overlay's own Esc level is covered by the overlay test.
+  const { app } = await render(fixture, { width: 168, height: 40 })
   try {
     expect(pressBind(fixture, "escape")).toBe(true)
     expect(closed).toBe(1)
 
-    expect(fixture.press("Filter the stream")).toBe(true)
+    expect(await clickRegion(app, STREAM_HEADER, "stream:filter")).toBe(true)
     await app.renderOnce()
     expect(frame(app)).toContain("build only")
     expect(pressBind(fixture, "escape")).toBe(true)
@@ -548,27 +552,13 @@ test("escape backs out one level and only then reaches the panel close", async (
     expect(frame(app)).toContain("All branches")
     expect(closed).toBe(1)
 
-    expect(fixture.press("Toggle inspector overlay")).toBe(true)
+    expect(fixture.press("Next row")).toBe(true)
+    expect(await clickRegion(app, INSPECTOR_ACTIONS, "kill")).toBe(true)
     await app.renderOnce()
-    expect(frame(app)).toContain("TOKENS BY BRANCH")
+    expect(statusText() ?? "").toContain("confirm")
     expect(pressBind(fixture, "escape")).toBe(true)
     await app.renderOnce()
-    expect(frame(app)).not.toContain("TOKENS BY BRANCH")
-    expect(closed).toBe(1)
-
-    expect(fixture.press("Show keys")).toBe(true)
-    await app.renderOnce()
-    expect(frame(app)).toContain("Keys")
-    expect(pressBind(fixture, "escape")).toBe(true)
-    await app.renderOnce()
-    expect(frame(app)).not.toContain("close this list")
-    expect(closed).toBe(1)
-
-    expect(fixture.press("Next agent")).toBe(true)
-    expect(fixture.press("Kill selected agent")).toBe(true)
-    expect(pressBind(fixture, "escape")).toBe(true)
-    await app.renderOnce()
-    expect(statusText() ?? "").not.toContain("press x again")
+    expect(statusText() ?? "").not.toContain("confirm")
     expect(closed).toBe(1)
 
     expect(pressBind(fixture, "escape")).toBe(true)
@@ -578,7 +568,7 @@ test("escape backs out one level and only then reaches the panel close", async (
   }
 })
 
-test("filter, fold, keys, Tab and Enter all move the screen", async () => {
+test("filter, fold, Tab and Enter all move the screen", async () => {
   const fixture = understoryFixture({
     specs: [
       { ...MIXED[0]!, state: "done", pending: 0 },
@@ -586,31 +576,27 @@ test("filter, fold, keys, Tab and Enter all move the screen", async () => {
       { ...MIXED[1]!, id: "ses_run", agent: "coder", state: "running", pending: 0 },
     ],
   })
-  const { app } = await render(fixture, { width: 120, height: 40 })
+  // Wide enough for the docked inspector, so the action row is on screen.
+  const { app } = await render(fixture, { width: 168, height: 40 })
   try {
-    expect(fixture.press("Fold finished agents")).toBe(true)
+    expect(await clickRegion(app, ROSTER, "fold")).toBe(true)
     await app.renderOnce()
     expect(frame(app)).toContain("2 done")
-    expect(frame(app)).toContain("z show")
+    expect(frame(app)).not.toContain("show done")
 
-    expect(fixture.press("Next agent")).toBe(true)
-    expect(fixture.press("Fold finished agents")).toBe(true)
+    expect(fixture.press("Next row")).toBe(true)
+    expect(await clickRegion(app, ROSTER, "fold")).toBe(true)
     await app.renderOnce()
-    expect(frame(app)).not.toContain("2 done")
+    expect(frame(app)).toContain("show done")
 
-    expect(fixture.press("Filter the stream")).toBe(true)
+    expect(await clickRegion(app, STREAM_HEADER, "stream:filter")).toBe(true)
     await app.renderOnce()
     expect(frame(app)).toContain("coder-2 only")
 
     expect(fixture.press("Focus composer")).toBe(true)
     expect(fixture.dispatched).toContain("pane.focus.left")
 
-    expect(fixture.press("Show keys")).toBe(true)
-    await app.renderOnce()
-    expect(frame(app)).toContain("move selection")
-    expect(fixture.press("Show keys")).toBe(true)
-
-    expect(fixture.press("Open agent session")).toBe(true)
+    expect(await clickRegion(app, INSPECTOR_ACTIONS, "open")).toBe(true)
     expect(fixture.navigated).toEqual([{ type: "session", sessionID: "ses_run" }])
   } finally {
     app.renderer.destroy()
@@ -636,7 +622,7 @@ test("at 168x48 the panel spends no row on hints: nine branches take three rows,
   const { app } = await render(fixture, { width: 168, height: 39, lens: null })
   try {
     // A live subagent is selected, so the inspector offers all three actions.
-    expect(fixture.press("Next agent")).toBe(true)
+    expect(fixture.press("Next row")).toBe(true)
     await app.renderOnce()
     const lines = frame(app).split("\n")
     const cols = understoryColumns(168)
@@ -653,10 +639,10 @@ test("at 168x48 the panel spends no row on hints: nine branches take three rows,
     // The legend, the fold hint and the action row all land on the last row.
     const last = lines[38]!
     expect(last).toContain("R read  S search  E edit  $ shell  V verify  W web")
-    expect(last).toContain("drag overview to zoom")
-    expect(roster(38)).toContain("z fold finished")
-    expect(inspector(38)).toContain("s steer")
-    expect(inspector(38)).toContain("x kill")
+    expect(last).not.toContain("drag overview to zoom")
+    expect(roster(38)).toContain("done")
+    expect(inspector(38)).toContain("steer")
+    expect(inspector(38)).toContain("kill")
     expect(inspector(38)).toContain("open session")
     // The rule above the actions sits on the row before it.
     expect(inspector(37)).toContain("────")
@@ -670,14 +656,16 @@ test("the noise-free status row is published for the host footer instead of draw
   const { app } = await render(fixture, { width: 168, height: 39, lens: null })
   try {
     // coder-2 is waiting, so the row leads with the ask and ends with the keys.
-    expect(agentsStatus()?.text).toBe("▲ coder-2 needs you: npm pack --dry-run · a allow")
+    expect(agentsStatus()?.text).toBe("▲ coder-2 needs you: npm pack --dry-run")
     expect(agentsStatus()?.tone).toBe("warning")
-    expect(agentsStatus()?.hints).toEqual(["1-3 lens", "drag ruler to rewind", "w next", "? keys"])
-    // Nothing of it is spent on a panel row.
+    expect(agentsStatus()?.hints).toEqual([])
+    // Nothing of it is spent on a panel row, and the message is a target that
+    // selects the agent it names.
     const text = frame(app)
-    expect(text).not.toContain("1-3 lens · drag ruler")
+    expect(text).not.toContain("1-3 lens")
+    expect(typeof agentsStatus()?.onAttention).toBe("function")
     await app.renderOnce()
-    expect(agentsStatus()?.text).toBe("▲ coder-2 needs you: npm pack --dry-run · a allow")
+    expect(agentsStatus()?.text).toBe("▲ coder-2 needs you: npm pack --dry-run")
   } finally {
     app.renderer.destroy()
   }
@@ -685,36 +673,24 @@ test("the noise-free status row is published for the host footer instead of draw
   expect(agentsStatus()).toBeUndefined()
 })
 
-test("the inspector overlay is toggled with i and does not resize the columns", async () => {
+test("the inspector overlay is toggled from the lens tabs and does not resize the columns", async () => {
   const fixture = understoryFixture({ specs: MIXED })
   const { app } = await render(fixture, { width: 120, height: 40 })
   try {
     const before = frame(app)
     expect(before).not.toContain("TOKENS BY BRANCH")
-    expect(fixture.press("Toggle inspector overlay")).toBe(true)
+    expect(await clickRegion(app, LENS_TABS, "lens:details")).toBe(true)
     await app.renderOnce()
     expect(frame(app)).toContain("TOKENS BY BRANCH")
     expectFits(app, 120)
-    expect(frame(app).split("\n")[0]!.slice(0, 76)).toBe(before.split("\n")[0]!.slice(0, 76))
-    expect(fixture.press("Toggle inspector overlay")).toBe(true)
+    // The roster columns never move: the overlay floats above them.
+    const roster = understoryColumns(120).roster
+    expect(frame(app).split("\n")[0]!.slice(0, roster)).toBe(before.split("\n")[0]!.slice(0, roster))
+    // The overlay carries its own close control, and Esc backs out too.
+    expect(frame(app)).toContain("close ×")
+    expect(await clickRegion(app, "banyancode.understory.overlay.chrome", "overlay:close")).toBe(true)
     await app.renderOnce()
     expect(frame(app)).not.toContain("TOKENS BY BRANCH")
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("the key list fits and scrolls at small sizes", async () => {
-  const fixture = understoryFixture({ specs: MIXED })
-  const { app } = await render(fixture, { width: 80, height: 16 })
-  try {
-    expect(fixture.press("Show keys")).toBe(true)
-    await app.renderOnce()
-    expect(frame(app)).toContain("move selection")
-    expect(fixture.press("Scroll keys down")).toBe(true)
-    await app.renderOnce()
-    expectFits(app, 80)
-    expect(fixture.press("Show keys")).toBe(true)
   } finally {
     app.renderer.destroy()
   }
@@ -795,7 +771,7 @@ test("selection stays visible in a scrolling roster", async () => {
   const fixture = understoryFixture({ specs: FANOUT })
   const { app } = await render(fixture, { width: 80, height: 18 })
   try {
-    for (let step = 0; step < 15; step += 1) expect(fixture.press("Next agent")).toBe(true)
+    for (let step = 0; step < 15; step += 1) expect(fixture.press("Next row")).toBe(true)
     await app.renderOnce()
     const text = frame(app)
     expect(text).toContain("▌")
@@ -813,7 +789,7 @@ test("a truncated history says earlier activity is not loaded", async () => {
   const { app } = await render(fixture, { width: 200, height: 40 })
   try {
     expect(frame(app)).toContain("earlier activity not loaded")
-    expect(fixture.press("Next agent")).toBe(true)
+    expect(fixture.press("Next row")).toBe(true)
     await app.renderOnce()
     expect(frame(app)).toContain("earlier activity not loaded")
   } finally {
@@ -942,13 +918,13 @@ test("1 2 3 switch the lens, and the tab strip carries the live clock", async ()
   const { app } = await render(fixture, { width: 168, height: 48, clock: fakeTimers(12_000) })
   try {
     const stream = frame(app)
-    expect(stream).toContain("1 Trace")
-    expect(stream).toContain("2 Roots")
-    expect(stream).toContain("3 Stream")
+    expect(stream).toContain("Trace")
+    expect(stream).toContain("Roots")
+    expect(stream).toContain("Stream")
     expect(stream).toContain("LIVE")
     expect(stream).toContain("All branches")
 
-    expect(fixture.press("Trace lens")).toBe(true)
+    expect(await clickRegion(app, LENS_TABS, "lens:trace")).toBe(true)
     await app.renderOnce()
     const trace = frame(app)
     expect(trace).toContain("R read")
@@ -956,17 +932,46 @@ test("1 2 3 switch the lens, and the tab strip carries the live clock", async ()
     expect(trace).not.toContain("Trace is not built yet.")
     expect(trace).not.toContain("All branches")
 
-    expect(fixture.press("Roots lens")).toBe(true)
+    expect(await clickRegion(app, LENS_TABS, "lens:roots")).toBe(true)
     await app.renderOnce()
     // Without a code graph the lens is the gap-(d) fallback: a flat map of the
     // touched files (none here) and the build hint.
     expect(frame(app)).toContain("/codegraph-build")
     expect(frame(app)).toContain("stale edit")
 
-    expect(fixture.press("Stream lens")).toBe(true)
+    expect(await clickRegion(app, LENS_TABS, "lens:stream")).toBe(true)
     await app.renderOnce()
     expect(frame(app)).toContain("All branches")
     expectFits(app, 168)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("left and right scroll the Trace time axis, and the latest control resumes", async () => {
+  const fixture = understoryFixture({
+    specs: [
+      {
+        id: "ses_late",
+        agent: "coder",
+        title: "late work",
+        state: "running",
+        created: 60_000,
+        tools: [{ name: "read", args: "late.ts", status: "completed" }],
+      },
+    ],
+  })
+  const { app } = await render(fixture, { width: 120, height: 40, clock: fakeTimers(90_000), lens: null })
+  try {
+    expect(frame(app)).not.toContain("→ latest")
+    expect(fixture.press("Scroll time back")).toBe(true)
+    await app.renderOnce()
+    expect(frame(app)).toContain("→ latest")
+
+    expect(fixture.press("Scroll time forward")).toBe(true)
+    expect(fixture.press("Scroll time forward")).toBe(true)
+    await app.renderOnce()
+    expect(frame(app)).not.toContain("→ latest")
   } finally {
     app.renderer.destroy()
   }
@@ -976,7 +981,7 @@ test("the lens survives leaving the tab and coming back", async () => {
   const fixture = understoryFixture({ specs: MIXED })
   const first = await render(fixture, { width: 168, height: 48, lens: null })
   try {
-    expect(fixture.press("Roots lens")).toBe(true)
+    expect(await clickRegion(first.app, LENS_TABS, "lens:roots")).toBe(true)
     await first.app.renderOnce()
     expect(frame(first.app)).toContain("/codegraph-build")
   } finally {
@@ -1043,7 +1048,7 @@ test("mounted through the panel at both widths", async () => {
   try {
     await narrow.renderOnce()
     expect(narrow.captureCharFrame()).not.toContain("TOKENS BY BRANCH")
-    expect(narrowFixture.press("Toggle inspector overlay")).toBe(true)
+    expect(await clickRegion(narrow, LENS_TABS, "lens:details")).toBe(true)
     await narrow.renderOnce()
     expect(narrow.captureCharFrame()).toContain("TOKENS BY BRANCH")
   } finally {

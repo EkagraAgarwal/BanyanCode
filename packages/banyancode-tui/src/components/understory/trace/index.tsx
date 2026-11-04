@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
-import { createMemo } from "solid-js"
+import { createEffect, createMemo } from "solid-js"
 import { isLiveState } from "../../../data/understory"
 import { messagesAt, tokenBuckets } from "../../../data/understory-spans"
 import { CellGrid, type Grid, type GridPointer } from "../cells"
-import { rosterWindow, TRACE_SECONDS_PER_COLUMN } from "../layout"
+import { HISTORY_LOAD_FRACTION, rosterWindow, TRACE_SECONDS_PER_COLUMN, WHEEL_FRACTION } from "../layout"
 import type { LensProps } from "../view"
 import {
   drawEmpty,
@@ -26,6 +26,14 @@ const DRAG_CELLS = 2
 export interface TraceLensProps extends LensProps {
   /** Wheel over the lens scrolls the roster and its lanes together. */
   readonly onScroll?: ((delta: number) => void) | undefined
+  /** Coarse live clock (one step per second); omitted means `view.viewT()`. */
+  readonly playhead?: number | undefined
+  /** True while the session has an older page the host can still serve. */
+  readonly historyMore?: ((sessionID: string) => boolean | undefined) | undefined
+  /** True while that session's older page is already in flight. */
+  readonly historyLoading?: ((sessionID: string) => boolean) | undefined
+  /** Ask the host for one older page of a session's messages. */
+  readonly loadOlder?: ((sessionID: string) => void) | undefined
 }
 
 /**
@@ -34,29 +42,41 @@ export interface TraceLensProps extends LensProps {
  * doing at the playhead. Every span is real data, and every frame is a pure
  * function of (spans, playhead, window), so a replay scrubs it with everything
  * else. Dragging the ruler scrubs, dragging the overview selects a zoom window
- * and a click on either moves the playhead.
+ * and a click on the overview moves the time window.
  */
 export function TraceLens(props: TraceLensProps) {
   const layout = createMemo(() => traceLayout(props.width))
   const rows = () => props.visible ?? props.rows
+  /** The playhead the lens draws: a coarse live clock, else the scrub time. */
+  const time = () => props.playhead ?? props.view.viewT()
 
   const origin = createMemo(() => {
     const root = props.rows.find((row) => row.depth === 0)
     return Math.max(0, root?.startedAt ?? props.rows[0]?.startedAt ?? 0)
   })
 
-  /** The newest event any loaded lane has, so a fitted window covers all of it. */
+  /**
+   * The newest event any loaded lane has. This is data only: a span starting
+   * or ending, a message appearing or completing. It never reads the clock, so
+   * the window cannot drift while nothing happens.
+   */
   const lastEvent = createMemo(() => {
     let last = origin()
     for (const row of props.rows) {
-      last = Math.max(last, row.endedAt !== undefined && row.endedAt <= props.view.viewT() ? row.endedAt : 0)
-      for (const span of props.spans.get(row.sessionID) ?? []) {
-        if (span.t0 > props.view.viewT()) continue
-        last = Math.max(last, span.t1 ?? span.t0)
+      last = Math.max(last, row.startedAt, row.endedAt ?? 0)
+      for (const span of props.spans.get(row.sessionID) ?? []) last = Math.max(last, span.t0, span.t1 ?? 0)
+      for (const message of props.messages(row.sessionID)) {
+        last = Math.max(last, message.time.created)
+        if (message.type === "assistant" && message.time.completed !== undefined) {
+          last = Math.max(last, message.time.completed)
+        }
       }
     }
     return last
   })
+
+  /** The newest event the playhead has reached; a replay must not show later work. */
+  const horizonEvent = createMemo(() => Math.min(lastEvent(), time()))
 
   const live = createMemo(() => props.rows.some((row) => isLiveState(row.state)))
 
@@ -75,7 +95,7 @@ export function TraceLens(props: TraceLensProps) {
 
   const playhead = () => {
     const end = ended()
-    const t = props.view.viewT()
+    const t = time()
     return end === undefined ? t : Math.min(t, end)
   }
 
@@ -85,7 +105,8 @@ export function TraceLens(props: TraceLensProps) {
       start: origin(),
       ...(end === undefined ? {} : { end }),
       columns: layout().history,
-      now: props.view.viewT(),
+      now: time(),
+      newest: lastEvent(),
     })
   }
 
@@ -93,7 +114,7 @@ export function TraceLens(props: TraceLensProps) {
   const overviewEnd = () => {
     const end = ended()
     if (end !== undefined) return end
-    return Math.max(origin() + 1, playhead(), lastEvent())
+    return Math.max(origin() + 1, playhead(), horizonEvent())
   }
 
   const laneTop = () => props.geometry.overview + props.geometry.ruler
@@ -146,6 +167,63 @@ export function TraceLens(props: TraceLensProps) {
     props.view.setT(target)
   }
 
+  /** The run bounds every manual scroll is clamped to. */
+  const bounds = () => {
+    const end = ended()
+    return { start: origin(), newest: lastEvent(), ...(end === undefined ? {} : { end }) }
+  }
+
+  /** Shift the time window by a fraction of its width. */
+  const scrollBy = (fraction: number) => {
+    if (fraction === 0) return
+    const range = bounds()
+    props.view.scrollTime({
+      start: range.start,
+      newest: range.newest,
+      ...(range.end === undefined ? {} : { end: range.end }),
+      fraction,
+    })
+  }
+
+  /** Bring an overview time into view, moving the window as little as possible. */
+  const jumpTo = (t: number) => {
+    const win = timeWindow()
+    const span = Math.max(1, win.b - win.a)
+    scrollBy((t - (win.a + win.b) / 2) / span)
+  }
+
+  /**
+   * One older page per session when its oldest loaded span comes near the left
+   * edge. The window start is the guard: a page load alone must not ask again,
+   * only a further scroll does. This is data-driven, not per frame.
+   */
+  const historyAsked = new Map<string, unknown>()
+  createEffect(() => {
+    const load = props.loadOlder
+    if (load === undefined) return
+    const win = timeWindow()
+    const threshold = (win.b - win.a) * HISTORY_LOAD_FRACTION
+    const { range } = windowed()
+    for (const row of rows().slice(range.offset, range.offset + range.count)) {
+      if (props.historyMore?.(row.sessionID) !== true) continue
+      if (props.historyLoading?.(row.sessionID) === true) continue
+      const oldest = (props.spans.get(row.sessionID) ?? []).reduce(
+        (min, span) => Math.min(min, span.t0),
+        Number.POSITIVE_INFINITY,
+      )
+      // The oldest span must be at or just left of the window's left edge; a
+      // window far to the right of it is scrolling recent work, not history.
+      if (!Number.isFinite(oldest) || oldest > win.b || win.a - oldest > threshold) continue
+      // A fixed window is its own marker, so each further scroll at a clamped
+      // edge asks again; a followed window keys on its start, so a page load
+      // alone does not cascade into the next page.
+      const marker = props.view.win() ?? win.a
+      if (historyAsked.get(row.sessionID) === marker) continue
+      historyAsked.set(row.sessionID, marker)
+      load(row.sessionID)
+    }
+  })
+
   /** The time under one history column of the current window. */
   const timeAt = (column: number): number => {
     const win = timeWindow()
@@ -159,7 +237,7 @@ export function TraceLens(props: TraceLensProps) {
     return from + ((column + 0.5) / Math.max(1, layout().history)) * (overviewEnd() - from)
   }
 
-  let drag: { readonly kind: "ruler" | "overview"; readonly x0: number; x1: number } | undefined
+  let drag: { readonly kind: "ruler" | "overview" | "lanes"; readonly x0: number; x1: number } | undefined
   let lastClick: { readonly at: number; readonly column: number } | undefined
 
   const regionColumn = (region: string | undefined, prefix: string): number | undefined => {
@@ -178,11 +256,23 @@ export function TraceLens(props: TraceLensProps) {
     const overview = regionColumn(pointer.region, "trace:overview:")
     if (overview !== undefined) {
       drag = { kind: "overview", x0: pointer.x, x1: pointer.x }
+      return
+    }
+    // Lanes pan the time axis: a drag is the same gesture as the ruler's scrub,
+    // but it moves what is visible rather than the playhead.
+    if (pointer.region?.startsWith("trace:lane:") === true || pointer.region?.startsWith("trace:call:") === true) {
+      drag = { kind: "lanes", x0: pointer.x, x1: pointer.x }
     }
   }
 
   const onDragMove = (pointer: GridPointer) => {
     if (drag === undefined) return
+    if (drag.kind === "lanes") {
+      const dx = pointer.x - drag.x1
+      drag = { ...drag, x1: pointer.x }
+      if (dx !== 0) scrollBy(-dx / Math.max(1, layout().history))
+      return
+    }
     drag = { ...drag, x1: pointer.x }
     if (drag.kind === "ruler") {
       const column = Math.max(0, Math.min(layout().history - 1, pointer.x - layout().x))
@@ -211,11 +301,15 @@ export function TraceLens(props: TraceLensProps) {
       props.view.resetZoom()
       return
     }
-    // A click on the overview is a seek, not a zoom window.
-    if (Math.abs(pointer.x - active.x0) < DRAG_CELLS) seek(overviewTime(column))
+    // A click on the overview moves the window, not the playhead.
+    if (Math.abs(pointer.x - active.x0) < DRAG_CELLS) jumpTo(overviewTime(column))
   }
 
   const hit = (region: string) => {
+    if (region === "trace:reset-zoom") {
+      props.view.resetZoom()
+      return
+    }
     if (region.startsWith("trace:call:")) {
       const parts = region.split(":")
       const sessionID = parts[2] ?? ""
@@ -234,7 +328,7 @@ export function TraceLens(props: TraceLensProps) {
       return
     }
     const overview = regionColumn(region, "trace:overview:")
-    if (overview !== undefined) seek(overviewTime(overview))
+    if (overview !== undefined) jumpTo(overviewTime(overview))
   }
 
   const drawGrid = (grid: Grid) => {
@@ -246,7 +340,10 @@ export function TraceLens(props: TraceLensProps) {
     const from = origin()
     const geometry = props.geometry
     const top = laneTop()
-    const tick = props.tick
+    // The grid animates only when animations are on; otherwise a ticker frame
+    // must not repaint the lanes.
+    const tick = props.animations ? props.tick : 0
+    const newest = lastEvent()
     const { per, range } = windowed()
     const list = rows().slice(range.offset, range.offset + range.count)
 
@@ -319,7 +416,8 @@ export function TraceLens(props: TraceLensProps) {
         animations: props.animations,
         tick,
         at,
-        now: props.view.viewT(),
+        now: time(),
+        newest,
         live: live(),
         pinned: pinned?.sessionID === entry.row.sessionID ? pinned.spanID : undefined,
         askText: props.ask?.(entry.row.sessionID),
@@ -357,11 +455,16 @@ export function TraceLens(props: TraceLensProps) {
       onDragStart={onDragStart}
       onDragMove={onDragMove}
       onDragEnd={onDragEnd}
-      onScroll={(direction, delta) => {
-        if (props.onScroll === undefined) return
-        if (direction === "left" || direction === "right") return
+      onScroll={(direction, delta, modifiers) => {
         const steps = Math.max(1, delta)
-        props.onScroll(direction === "down" ? steps : -steps)
+        // A horizontal wheel, or shift on a vertical one, moves time. Plain
+        // vertical wheel still scrolls the roster and its lanes together.
+        if (direction === "left" || direction === "right" || modifiers?.shift === true) {
+          const back = direction === "left" || direction === "up"
+          scrollBy((back ? -1 : 1) * steps * WHEEL_FRACTION)
+          return
+        }
+        props.onScroll?.(direction === "down" ? steps : -steps)
       }}
     />
   )

@@ -15,6 +15,12 @@ export interface AgentsStatus {
   readonly tone?: "warning" | "error" | undefined
   /** Right-aligned key hints, most important first. */
   readonly hints: readonly string[]
+  /**
+   * What clicking the attention message does: pick the agent it names. The
+   * footer is host-side, so the panel hands the action over rather than
+   * owning a hit region there.
+   */
+  readonly onAttention?: (() => void) | undefined
 }
 
 const [current, write] = createSignal<AgentsStatus | undefined>(undefined)

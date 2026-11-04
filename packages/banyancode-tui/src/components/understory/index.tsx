@@ -1,9 +1,8 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import type { SessionMessageInfo } from "@opencode/client"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import type { KeyEvent } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js"
+import { createEffect, createMemo, createSignal, onCleanup, onMount, Show, untrack } from "solid-js"
 import type { CodegraphLive, MeshLive } from "../../data/live"
 import { setAgentsStatus, type AgentsStatus } from "../../data/agents-status"
 import { canSteer, pendingCount } from "../../data/mesh"
@@ -32,16 +31,18 @@ import { createTicker, ease, spring, useTickerWhen, type Ticker } from "../../mo
 import { palette } from "../../theme"
 import { steerSubagent, type AgentTarget } from "../dialogs/actions"
 import { PANEL_KEY_MODE, usePanelFocus, usePanelScroll } from "../panels/keys"
+import { CellGrid } from "./cells"
 import { buildGraphData, fileName, type GraphData } from "./graph-data"
 import {
   composerPlaceholder,
   registerComposerRouting,
 } from "./composer-route"
 import { branchHue } from "./hue"
-import { Inspector, type FileTouch, type InspectorAsk } from "./inspector"
+import { Inspector, type FileTouch, type InspectorAction, type InspectorAsk } from "./inspector"
 import { LensTabs } from "./lens-tabs"
 import {
   INSPECTOR_WIDTH,
+  PAGE_FRACTION,
   rosterAreaRows,
   rosterRowHeight,
   rosterWindow,
@@ -49,38 +50,21 @@ import {
   runStateColor,
   runStateLabel,
   rowGeometry,
-  spans,
   understoryColumns,
 } from "./layout"
-import { LineView } from "./line"
 import { Roster, rowColor, rowGlyph } from "./roster"
 import { StreamLens } from "./stream"
 import { TraceLens } from "./trace"
 import { RootsLens } from "./roots"
-import { createUnderstoryView, lensStore, lensForKey, REPLAY_OFF, type Lens, type LensProps } from "./view"
-
-const KEY_ROWS: ReadonlyArray<readonly [string, string]> = [
-  ["1 2 3", "Trace, Roots, Stream"],
-  ["j k  ↑ ↓", "move selection"],
-  ["← →", "scrub 2 seconds"],
-  ["+ - 0", "zoom the time axis"],
-  ["w", "next agent needing attention"],
-  ["z", "fold finished agents"],
-  ["f", "stream: selected agent only"],
-  ["i", "inspector overlay"],
-  ["s", "steer the selected agent"],
-  ["x", "kill (press twice)"],
-  ["Enter", "open the agent session"],
-  ["a A d", "allow once, always, deny"],
-  ["Tab @", "focus the composer"],
-  ["Esc", "back out one level"],
-  ["?", "close this list"],
-]
-
+import { createUnderstoryView, lensStore, REPLAY_OFF, type LensProps } from "./view"
 /**
- * D · Understory: the shell. It owns the roster, the keys, the layout and the
- * shared view state; the active lens is one seam below the lens tabs. The
- * lenses read real span data and draw themselves.
+ * D · Understory: the shell. It owns the roster, the layout and the shared view
+ * state; the active lens is one seam below the lens tabs. The lenses read real
+ * span data and draw themselves.
+ *
+ * The tab is click-first: every action has a visible target, and the only keys
+ * left are the ones a list has always had (arrows, Enter, Esc, Tab). A typed
+ * printable character goes to the composer instead of being swallowed here.
  */
 export function Understory(props: {
   readonly context: Context
@@ -130,6 +114,7 @@ export function Understory(props: {
       pending: (sessionID) => pendingCount(props.context, sessionID),
       status: (sessionID) => props.context.data.session.status(sessionID),
       messages: messagesOf,
+      more: (sessionID) => props.context.data.session.message.more?.(sessionID),
     }),
   )
 
@@ -146,16 +131,21 @@ export function Understory(props: {
   })
 
   const view = createUnderstoryView({ now, lens: lensStore(props.context) })
+  // The live clock the lanes draw is coarse: one step per second, so a ticker
+  // frame never needs to repaint the timeline. It only advances when the
+  // ticker itself is running (animations on and work live).
+  let lastClockSecond = Math.floor(now() / 1000)
+  const [clockSecond, setClockSecond] = createSignal(lastClockSecond)
 
   const [selection, setSelection] = createSignal<string>()
   const [folded, setFolded] = createSignal(false)
-  const [keyList, setKeyList] = createSignal(false)
-  const [keyOffset, setKeyOffset] = createSignal(0)
   const [message, setMessage] = createSignal<string>()
   const [armed, setArmed] = createSignal<{ readonly sessionID: string; readonly label: string }>()
   const [rosterOffset, setRosterOffset] = createSignal(0)
   const [following, setFollowing] = createSignal(true)
   const [streamTop, setStreamTop] = createSignal(0)
+  /** Last stream scroll position, so reaching the top loads once, not per event. */
+  let streamTopWas = -1
   /** Roots zoom: the package the map is showing, if any. */
   const [rootsRoot, setRootsRoot] = createSignal<string | undefined>(undefined)
 
@@ -353,33 +343,29 @@ export function Understory(props: {
     select(list[next]?.sessionID)
   }
 
-  /** ← → move the playhead two seconds inside the loaded run, from wherever it is. */
-  const scrub = (delta: number) => {
+  /** The run bounds the time window is clamped to from the shell's keys. */
+  const traceBounds = () => {
     const rootRow = rows().find((row) => row.depth === 0)
-    if (rootRow === undefined) return
-    const clock = now()
-    const next = Math.max(rootRow.startedAt, Math.min(clock, view.viewT() + delta))
-    view.setT(next >= clock - 150 ? undefined : next)
+    const start = Math.max(0, rootRow?.startedAt ?? rows()[0]?.startedAt ?? 0)
+    let newest = start
+    for (const row of rows()) {
+      newest = Math.max(newest, row.startedAt, row.endedAt ?? 0, newestMessageAt(messagesOf(row.sessionID)))
+      for (const span of spansBySession().get(row.sessionID) ?? []) newest = Math.max(newest, span.t0, span.t1 ?? 0)
+    }
+    return { start, newest }
   }
 
-  /**
-   * `[` and `]` step the playhead event by event on the selected agent: the
-   * previous or next span start. `]` past the last event returns to live.
-   */
-  const stepEvent = (delta: 1 | -1) => {
-    const row = selected()
-    if (row === undefined) return
-    const times = (spansBySession().get(row.sessionID) ?? [])
-      .map((span) => span.t0)
-      .filter((time, index, list) => time <= now() && list.indexOf(time) === index)
-      .sort((left, right) => left - right)
-    const time = view.viewT()
-    const next =
-      delta < 0
-        ? [...times].reverse().find((candidate) => candidate < time - 10)
-        : times.find((candidate) => candidate > time + 10)
-    if (next !== undefined) view.setT(next)
-    else if (delta > 0) view.setT(undefined)
+  /** ← → scroll the timeline by a page; they no longer move the playhead. */
+  const traceScroll = (fraction: number) => {
+    const bounds = traceBounds()
+    view.scrollTime({ ...bounds, fraction })
+  }
+
+  /** Fetch one older page of a session, if the host exposes paging. */
+  const loadOlderPage = (sessionID: string) => {
+    const load = props.context.data.session.message.loadMore
+    if (load === undefined) return
+    void load(sessionID).catch(() => undefined)
   }
 
   /** Nothing that writes to the run may fire while the playhead is scrubbed. */
@@ -398,10 +384,19 @@ export function Understory(props: {
     select(next)
   }
 
+  /** The footer's attention line: pick the agent it names. */
+  const selectWaiting = () => {
+    const waiting = displayRows().find((row) => row.state === "waiting")
+    if (waiting === undefined) {
+      jumpAttention()
+      return
+    }
+    select(waiting.sessionID)
+  }
+
   const toggleFold = () => {
     const next = !folded()
     setFolded(next)
-    setKeyOffset(0)
     setRosterOffset(0)
     const result = visibleRows(displayRows(), { folded: next, selected: selection() })
     if (result.selected !== undefined) setSelection(result.selected)
@@ -464,18 +459,14 @@ export function Understory(props: {
   const answer = (decision: "once" | "always" | "reject") => {
     const row = selectedLive()
     if (!needLive()) return
-    if (row === undefined) {
-      say("press w to jump to the next waiting agent")
-      return
-    }
-    if (!waiting()) {
-      say("press w to jump to the next waiting agent")
+    if (row === undefined || !waiting()) {
+      say("select the agent that is waiting")
       return
     }
     const request = permissions()[0]
     if (request === undefined) {
-      if (forms().length > 0) say("questions need Enter; open the session to answer")
-      else say("press w to jump to the next waiting agent")
+      if (forms().length > 0) say("answer this question in its session")
+      else say("select the agent that is waiting")
       return
     }
     void props.context.client.permission.reply({ sessionID: row.sessionID, requestID: request.id, decision }).then(
@@ -508,17 +499,17 @@ export function Understory(props: {
     }
     disarm()
     setArmed({ sessionID: row.sessionID, label: row.label })
-    say(`press x again to kill ${row.label}`, 3_000)
+    say(`kill ${row.label}? use kill again to confirm`, 3_000)
     killTimer = timers.setTimeout(() => {
       setArmed(undefined)
       killTimer = undefined
-      setMessage((value) => (value === `press x again to kill ${row.label}` ? undefined : value))
+      setMessage((value) => (value === `kill ${row.label}? use kill again to confirm` ? undefined : value))
     }, 3_000)
   }
 
   const focusComposer = (text?: string) => {
-    // The host hook focuses the real prompt and can type the first key, so `@`
-    // arrives already typed instead of being handled twice.
+    // The host hook focuses the real prompt and can type the first key, so a
+    // typed character arrives already inserted instead of being handled twice.
     if (props.context.ui.composer.focus(text)) return
     props.context.keymap.dispatch("pane.focus.left")
   }
@@ -555,11 +546,6 @@ export function Understory(props: {
   }
 
   const closeOneLevel = () => {
-    if (keyList()) {
-      setKeyList(false)
-      setKeyOffset(0)
-      return
-    }
     // Roots: Esc backs out of a package zoom before it closes anything else.
     if (view.lens() === "roots" && rootsRoot() !== undefined) {
       setRootsRoot(undefined)
@@ -580,191 +566,55 @@ export function Understory(props: {
   }
 
   /**
-   * Switch to `wanted` only when the key really is that digit. A programmatic
-   * dispatch carries no event and is allowed; a keyboard match must name the
-   * digit, so a base-layout fallback match never changes the lens.
+   * Every key the tab still owns is a list key: arrows pick and scroll, Enter
+   * opens, Esc backs out, Tab hands the keyboard to the composer. Everything
+   * else is a mouse target on screen.
    */
-  const lensCommand = (wanted: Lens, event: KeyEvent | undefined): false | void => {
-    if (event !== undefined && lensForKey(event.name) !== wanted) return false
-    view.setLens(wanted)
-  }
-
   props.context.keymap.layer(() => ({
     mode: PANEL_KEY_MODE,
     priority: 35,
     commands: [
       {
-        // The lens keys are named so the handler sees the key it was dispatched
-        // for. `@opentui/keymap` adds the physical key's base-layout character
-        // as an extra match, so a bare `3` can appear for a key that is not a
-        // digit (the host's ctrl+] tab switch carries its own base key); only
-        // the event's name proves a real digit press.
-        id: "understory.lens.trace",
-        bind: "1",
-        title: "Trace lens",
-        group: "Understory",
-        enabled: editing,
-        run: (_input, event) => lensCommand("trace", event),
-      },
-      {
-        id: "understory.lens.roots",
-        bind: "2",
-        title: "Roots lens",
-        group: "Understory",
-        enabled: editing,
-        run: (_input, event) => lensCommand("roots", event),
-      },
-      {
-        id: "understory.lens.stream",
-        bind: "3",
-        title: "Stream lens",
-        group: "Understory",
-        enabled: editing,
-        run: (_input, event) => lensCommand("stream", event),
-      },
-      {
-        bind: "=",
-        title: "Zoom in",
-        group: "Understory",
-        enabled: editing,
-        run: () => view.zoom(1),
-      },
-      {
-        bind: "shift+=",
-        title: "Zoom in",
-        group: "Understory",
-        enabled: editing,
-        run: () => view.zoom(1),
-      },
-      {
-        bind: "-",
-        title: "Zoom out",
-        group: "Understory",
-        enabled: editing,
-        run: () => view.zoom(-1),
-      },
-      {
-        bind: "0",
-        title: "Reset zoom",
-        group: "Understory",
-        enabled: editing,
-        run: view.resetZoom,
-      },
-      {
-        bind: "left",
-        title: "Scrub back",
-        group: "Understory",
-        enabled: editing,
-        run: () => scrub(-2_000),
-      },
-      {
-        bind: "right",
-        title: "Scrub forward",
-        group: "Understory",
-        enabled: editing,
-        run: () => scrub(2_000),
-      },
-      {
-        bind: "[",
-        title: "Previous event",
-        group: "Understory",
-        enabled: editing,
-        run: () => stepEvent(-1),
-      },
-      {
-        bind: "]",
-        title: "Next event",
-        group: "Understory",
-        enabled: editing,
-        run: () => stepEvent(1),
-      },
-      { bind: "l", title: "Return to live", group: "Understory", enabled: editing, run: () => view.setT(undefined) },
-      {
-        // `End` returns to live while scrubbed, and keeps its panel-scroll
-        // meaning otherwise (the shell's own lower-priority binding).
-        bind: "end",
-        title: "Return to live",
-        group: "Understory",
-        enabled: () => editing() && !view.live(),
-        run: () => view.setT(undefined),
-      },
-      { bind: "j", title: "Next agent", group: "Understory", enabled: editing, run: () => move(1) },
-      { bind: "k", title: "Previous agent", group: "Understory", enabled: editing, run: () => move(-1) },
-      {
         bind: "down",
         title: "Next row",
         group: "Understory",
-        enabled: () => editing() && !keyList(),
+        enabled: editing,
         run: () => move(1),
       },
       {
         bind: "up",
         title: "Previous row",
         group: "Understory",
-        enabled: () => editing() && !keyList(),
+        enabled: editing,
         run: () => move(-1),
       },
       {
-        bind: "down",
-        title: "Scroll keys down",
-        group: "Understory",
-        enabled: () => editing() && keyList(),
-        run: () => setKeyOffset((value) => value + 1),
-      },
-      {
-        bind: "up",
-        title: "Scroll keys up",
-        group: "Understory",
-        enabled: () => editing() && keyList(),
-        run: () => setKeyOffset((value) => Math.max(0, value - 1)),
-      },
-      { bind: "w", title: "Next waiting agent", group: "Understory", enabled: editing, run: jumpAttention },
-      { bind: "z", title: "Fold finished agents", group: "Understory", enabled: editing, run: toggleFold },
-      {
-        // Roots: blast radius for the selected tile (brief section 11, `b`).
-        bind: "b",
-        title: "Roots blast radius",
-        group: "Understory",
-        enabled: () => editing() && view.lens() === "roots" && view.file() !== undefined,
-        run: () => view.setBlast(!view.blast()),
-      },
-      {
-        bind: "f",
-        title: "Filter the stream",
+        bind: "pagedown",
+        title: "Scroll lanes down",
         group: "Understory",
         enabled: editing,
-        run: () => view.setFilter(!view.filter()),
+        run: () => scrollRoster(Math.max(1, geometry().visibleLanes)),
       },
       {
-        bind: "i",
-        title: "Toggle inspector overlay",
-        group: "Understory",
-        enabled: () => editing() && overlayMode(),
-        run: () => view.setOverlay(!view.overlay()),
-      },
-      {
-        bind: "?",
-        title: "Show keys",
+        bind: "pageup",
+        title: "Scroll lanes up",
         group: "Understory",
         enabled: editing,
-        run: () => {
-          setKeyOffset(0)
-          setKeyList((value) => !value)
-        },
+        run: () => scrollRoster(-Math.max(1, geometry().visibleLanes)),
       },
       {
-        bind: "s",
-        title: "Steer selected agent",
+        bind: "left",
+        title: "Scroll time back",
         group: "Understory",
-        enabled: () => editing() && (selected()?.depth ?? 0) > 0,
-        run: steer,
+        enabled: () => editing() && view.lens() === "trace",
+        run: () => traceScroll(-PAGE_FRACTION),
       },
       {
-        bind: "x",
-        title: "Kill selected agent",
+        bind: "right",
+        title: "Scroll time forward",
         group: "Understory",
-        enabled: () => editing() && (selected()?.depth ?? 0) > 0,
-        run: kill,
+        enabled: () => editing() && view.lens() === "trace",
+        run: () => traceScroll(PAGE_FRACTION),
       },
       {
         bind: "enter",
@@ -773,25 +623,14 @@ export function Understory(props: {
         enabled: () => editing() && selected() !== undefined,
         run: () => open(selected()),
       },
-      { bind: "a", title: "Allow once", group: "Understory", enabled: editing, run: () => answer("once") },
-      { bind: "shift+a", title: "Always allow", group: "Understory", enabled: editing, run: () => answer("always") },
-      { bind: "d", title: "Deny", group: "Understory", enabled: editing, run: () => answer("reject") },
       { bind: "tab", title: "Focus composer", group: "Understory", enabled: editing, run: () => focusComposer() },
-      {
-        bind: "@",
-        title: "Focus composer and pick a branch",
-        group: "Understory",
-        enabled: editing,
-        run: () => focusComposer("@"),
-      },
       {
         bind: "escape",
         title: "Back out one level",
         group: "Understory",
         enabled: () =>
           editing() &&
-          (keyList() ||
-            (view.lens() === "roots" && rootsRoot() !== undefined) ||
+          ((view.lens() === "roots" && rootsRoot() !== undefined) ||
             (overlayMode() && view.overlay()) ||
             view.filter() ||
             armed() !== undefined),
@@ -836,6 +675,19 @@ export function Understory(props: {
 
   const tick = useTickerWhen(ticker, () => rows().some((row) => isLiveState(row.state)) || overlayAnimating())
 
+  // Quantise the ticker to whole seconds for the clock and the now line. The
+  // signal changes once per second, so no lane repaints on the frames between.
+  createEffect(() => {
+    tick()
+    // Data changes also re-read the clock, so an idle ticker with animations
+    // off still shows the current second when new work lands.
+    rows()
+    const next = Math.floor(now() / 1000)
+    if (next === lastClockSecond) return
+    lastClockSecond = next
+    setClockSecond(next)
+  })
+
   // The Agents tab owns the composer's routing for as long as it is mounted:
   // `@coder-1 fix this` steers that one branch, plain text stays root text, and
   // replay refuses every send. Chat registers none of this.
@@ -870,10 +722,10 @@ export function Understory(props: {
   }
 
   const runClockText = createMemo(() => {
-    tick()
     const rootRow = rows().find((row) => row.depth === 0)
     if (rootRow === undefined) return "0:00"
-    const end = view.viewT()
+    // Coarse while live: the tab strip is not a lane and must not repaint it.
+    const end = view.live() ? clockSecond() * 1000 : view.viewT()
     return runClock(Math.max(0, end - rootRow.startedAt))
   })
 
@@ -904,7 +756,7 @@ export function Understory(props: {
       const target = pendingTarget(first.sessionID)
       const more = waitingRows.length > 1 ? ` (+${waitingRows.length - 1})` : ""
       return {
-        text: `▲ ${first.label} needs you${target === undefined ? "" : `: ${target}`}${more} · a allow`,
+        text: `▲ ${first.label} needs you${target === undefined ? "" : `: ${target}`}${more}`,
         tone: "warning",
       }
     }
@@ -922,44 +774,60 @@ export function Understory(props: {
     return undefined
   })
 
-  /** The mockup's right-aligned key hints on the status row. */
-  const statusHints = createMemo((): string[] => {
-    const segments: string[] = []
-    if (width() >= 120) {
-      segments.push("1-3 lens")
-      if (view.lens() === "trace") segments.push(view.live() ? "drag ruler to rewind" : "l back to live")
-    }
-    segments.push("w next")
-    if (overlayMode()) segments.push("i inspector")
-    segments.push("? keys")
-    return segments
-  })
-
   /**
    * The tab's status row, published to the host footer: the panel spends no
-   * row of its own on hints, so the row under the composer carries them. One
-   * signal, read by `session.footer`; cleared when the panel unmounts.
+   * row of its own on it, so the row under the composer carries the message.
+   * Clicking that message picks the agent it names. One signal, read by
+   * `session.footer`; cleared when the panel unmounts.
    */
   const statusRow = createMemo((): AgentsStatus => {
     const left = statusLeft()
     return {
       ...(left === undefined ? {} : { text: left.text, tone: left.tone }),
-      hints: statusHints(),
+      hints: [],
+      onAttention: selectWaiting,
     }
   })
   createEffect(() => setAgentsStatus(statusRow()))
   onCleanup(() => setAgentsStatus(undefined))
 
-  const actionSegments = createMemo((): string[] => {
-    if (!view.live()) return ["l back to live"]
+  /** The sheet's action row: a button per action, never a key hint. */
+  const actions = createMemo((): readonly InspectorAction[] => {
+    if (view.lens() === "roots" && view.file() !== undefined) {
+      return [
+        {
+          id: "blast",
+          label: view.blast() ? "hide blast radius" : "blast radius",
+          tone: "primary",
+          run: () => view.setBlast(!view.blast()),
+        },
+      ]
+    }
+    if (!view.live()) return [{ id: "live", label: "back to live", tone: "primary", run: () => view.setT(undefined) }]
     const row = selected()
     if (row === undefined) return []
-    if (armed() !== undefined && armed()!.sessionID === row.sessionID) return [`x kill ${row.label}`]
-    const segments: string[] = []
-    if (row.depth > 0 && steerable(row)) segments.push("s steer")
-    if (row.depth > 0 && row.state !== "killed") segments.push("x kill")
-    segments.push("↵ open session")
-    return segments
+    const buttons: InspectorAction[] = []
+    if (armed() !== undefined && armed()!.sessionID === row.sessionID) {
+      buttons.push({ id: "kill", label: "confirm kill?", tone: "error", run: kill })
+      return buttons
+    }
+    if (row.depth > 0 && steerable(row)) {
+      buttons.push({
+        id: "steer",
+        label: "steer",
+        tone: "leaf",
+        run: () => {
+          const live = selectedLive()
+          if (live !== undefined && live.depth > 0) focusComposer(`@${live.label} `)
+          else steer()
+        },
+      })
+    }
+    if (row.depth > 0 && row.state !== "killed") {
+      buttons.push({ id: "kill", label: "kill", tone: "error", run: kill })
+    }
+    buttons.push({ id: "open", label: "open session", tone: "primary", run: () => open(selected()) })
+    return buttons
   })
 
   const inspectorWidth = () => Math.min(INSPECTOR_WIDTH, width())
@@ -981,7 +849,9 @@ export function Understory(props: {
       animations={animations()}
       tick={tick()}
       now={at}
-      actions={actionSegments()}
+      actions={actions()}
+      onAnswer={answer}
+      onOpenSession={() => open(selectedLive())}
       file={view.lens() === "roots" ? view.file() : undefined}
       graph={graph()}
       pinned={view.pinned()}
@@ -1011,26 +881,56 @@ export function Understory(props: {
     on: { selectAgent: select, pinCall: view.pinCall, selectFile: view.selectFile },
   })
 
-  const keyWidth = () => Math.min(52, Math.max(6, width() - 2))
-  const keyLines = createMemo(() => {
-    const inner = Math.max(6, keyWidth() - 4)
-    const total = KEY_ROWS.length
-    const visibleCount = Math.max(1, Math.min(total, height() - 7))
-    const offset = Math.max(0, Math.min(keyOffset(), Math.max(0, total - visibleCount)))
-    const lines = [spans(inner, [{ text: "Keys", color: theme().text, bold: true }])]
-    for (const [key, description] of KEY_ROWS.slice(offset, offset + visibleCount)) {
-      lines.push(
-        spans(inner, [
-          { text: key, color: theme().leaf, bold: true },
-          { text: " ".repeat(Math.max(1, 14 - key.length)), color: theme().muted },
-          { text: description, color: theme().muted },
-        ]),
-      )
+  /**
+   * Typing goes to the composer. The panel holds the keyboard on this tab, and
+   * with the single-letter commands gone a printable character has no other
+   * meaning: it focuses the prompt and arrives already inserted. Modifier
+   * chords (ctrl+p, ctrl+]) are left alone, and paste follows the same path.
+   */
+  onMount(() => {
+    const input = props.context.renderer?.keyInput
+    if (input === undefined) return
+    const onKey = (event: {
+      readonly name: string
+      readonly ctrl: boolean
+      readonly meta: boolean
+      readonly option: boolean
+      readonly super?: boolean
+      readonly hyper?: boolean
+      readonly eventType?: string
+      preventDefault?(): void
+    }) => {
+      if (!editing()) return
+      if (event.eventType !== undefined && event.eventType !== "press") return
+      if (event.ctrl || event.meta || event.option || event.super === true || event.hyper === true) return
+      if (props.context.renderer?.currentFocusedEditor != null) return
+      // A base-layout fallback rewrites the name but keeps the sequence, so a
+      // chord like ctrl+] arrives as `]` with sequence `3`. Only an event whose
+      // sequence is the character itself is a real press.
+      const sequence = (event as { readonly sequence?: string }).sequence
+      const char = sequence !== undefined && [...sequence].length === 1 ? sequence : event.name
+      if ([...char].length !== 1) return
+      if (char !== event.name && event.name !== "space") return
+      if (char < " " || char === "\u007f") return
+      // The character is inserted here, so the rest of the dispatch must not
+      // type it a second time into the prompt that just took focus.
+      event.preventDefault?.()
+      focusComposer(char)
     }
-    if (offset + visibleCount < total) {
-      lines.push(spans(inner, [{ text: `↓ ${total - offset - visibleCount} more`, color: theme().faint }]))
+    const onPaste = (event: { readonly bytes: Uint8Array; preventDefault?(): void }) => {
+      if (!editing()) return
+      if (props.context.renderer?.currentFocusedEditor != null) return
+      const text = new TextDecoder().decode(event.bytes)
+      if (text === "") return
+      event.preventDefault?.()
+      focusComposer(text)
     }
-    return lines
+    input.on("keypress", onKey)
+    input.on("paste", onPaste)
+    onCleanup(() => {
+      input.off("keypress", onKey)
+      input.off("paste", onPaste)
+    })
   })
 
   return (
@@ -1064,6 +964,8 @@ export function Understory(props: {
           header={geometry().header}
           laneHeight={geometry().laneHeight}
           onSelect={select}
+          onOpen={(sessionID) => open(rows().find((row) => row.sessionID === sessionID))}
+          onFold={toggleFold}
           onScroll={scrollRoster}
         />
 
@@ -1075,10 +977,21 @@ export function Understory(props: {
             theme={theme()}
             clock={runClockText()}
             live={view.live()}
+            following={view.following()}
+            onLatest={view.latest}
+            onLive={() => view.setT(undefined)}
+            overlay={overlayMode() ? { open: view.overlay(), toggle: () => view.setOverlay(!view.overlay()) } : undefined}
           />
           <box flexDirection="column" flexGrow={1} minHeight={0} minWidth={0}>
             {view.lens() === "trace" ? (
-              <TraceLens {...lensProps()} onScroll={scrollRoster} />
+              <TraceLens
+                {...lensProps()}
+                onScroll={scrollRoster}
+                playhead={view.live() ? clockSecond() * 1000 : undefined}
+                historyMore={(sessionID) => props.context.data.session.message.more?.(sessionID)}
+                historyLoading={(sessionID) => props.context.data.session.message.loading?.(sessionID) ?? false}
+                loadOlder={loadOlderPage}
+              />
             ) : view.lens() === "roots" ? (
               <RootsLens
                 {...lensProps()}
@@ -1093,10 +1006,19 @@ export function Understory(props: {
                 {...lensProps()}
                 following={following()}
                 top={streamTop()}
+                onFilter={() => view.setFilter(!view.filter())}
                 onScroll={(scroll, top, follow) => {
                   streamScroll = scroll
                   setStreamTop(top)
                   setFollowing(follow)
+                  // Reaching the oldest loaded entry asks each visible branch
+                  // for one older page, once per crossing rather than per event.
+                  if (top === 0 && streamTopWas !== 0) {
+                    for (const row of visible()) {
+                      if (props.context.data.session.message.more?.(row.sessionID) === true) loadOlderPage(row.sessionID)
+                    }
+                  }
+                  streamTopWas = top
                 }}
               />
             )}
@@ -1114,31 +1036,28 @@ export function Understory(props: {
             width={inspectorWidth()}
             zIndex={20}
             backgroundColor={theme().surface}
+            flexDirection="column"
           >
+            {/* The overlay's own close control: the lens tabs' chip is behind it. */}
+            <CellGrid
+              id="banyancode.understory.overlay.chrome"
+              width={Math.max(1, inspectorWidth())}
+              height={1}
+              background={theme().surface}
+              draw={(grid) => {
+                const close = "close ×"
+                const start = Math.max(0, inspectorWidth() - close.length - 2)
+                grid.text(start, 0, close, theme().muted)
+                grid.hit(start, 0, close.length, 1, "overlay:close")
+              }}
+              onHit={(region) => {
+                if (region === "overlay:close") view.setOverlay(false)
+              }}
+            />
             {inspector(inspectorWidth())}
           </box>
         </Show>
       </box>
-
-      <Show when={keyList()}>
-        <box
-          position="absolute"
-          left={Math.max(0, Math.floor((width() - keyWidth()) / 2))}
-          top={Math.max(0, Math.floor((height() - Math.min(KEY_ROWS.length + 4, height() - 2)) / 2))}
-          width={keyWidth()}
-          height={Math.min(KEY_ROWS.length + 4, Math.max(6, height() - 2))}
-          border
-          borderColor={theme().primary}
-          backgroundColor={theme().surface}
-          flexDirection="column"
-          paddingLeft={1}
-          paddingRight={1}
-          paddingTop={1}
-          zIndex={30}
-        >
-          <For each={keyLines()}>{(line) => <LineView width={keyWidth() - 4} spans={line} />}</For>
-        </box>
-      </Show>
     </box>
   )
 }

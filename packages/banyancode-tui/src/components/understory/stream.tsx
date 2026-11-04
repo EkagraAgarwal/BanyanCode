@@ -1,5 +1,5 @@
 import type { RGBA, ScrollBoxRenderable } from "@opentui/core"
-import { createMemo, For, Show } from "solid-js"
+import { createMemo, createSignal, For, Show } from "solid-js"
 import { truncate } from "../../data/format"
 import { returnedSummary } from "../../data/messages"
 import { isLiveState, shortLabel, streamEntries, type StreamEntry, type StreamSession } from "../../data/understory"
@@ -7,6 +7,7 @@ import { durationText } from "../../data/understory-spans"
 import type { Palette } from "../../theme"
 import { mix } from "../../motion"
 import { sproutFrame } from "../status/sprout"
+import { CellGrid } from "./cells"
 import { spans, streamClock, type Span } from "./layout"
 import { LineView, type Line } from "./line"
 import type { LensProps } from "./view"
@@ -16,6 +17,8 @@ export interface StreamLensProps extends LensProps {
   readonly following: boolean
   /** First visible entry index while follow is paused. */
   readonly top: number
+  /** The header's filter toggle: selected agent only, or every branch. */
+  readonly onFilter: () => void
   readonly onScroll: (scroll: ScrollBoxRenderable, top: number, following: boolean) => void
 }
 
@@ -68,6 +71,7 @@ export function StreamLens(props: StreamLensProps) {
       filterHue={
         props.view.filter() && props.selected !== undefined ? props.hues.get(props.selected) : undefined
       }
+      onFilter={() => props.view.setFilter(!props.view.filter())}
       following={props.following}
       top={props.top}
       onScroll={props.onScroll}
@@ -87,11 +91,13 @@ function StreamView(props: {
   readonly origin: number
   readonly filterLabel: string
   readonly filterHue?: RGBA | undefined
+  readonly onFilter: () => void
   readonly following: boolean
   readonly top: number
   readonly onScroll: (scroll: ScrollBoxRenderable, top: number, following: boolean) => void
 }) {
   let scroll: ScrollBoxRenderable | undefined
+  const [hover, setHover] = createSignal<string>()
   const inner = () => Math.max(0, props.width - 1)
   const area = () => Math.max(0, props.height - 1)
   const total = () => props.entries.length
@@ -143,30 +149,65 @@ function StreamView(props: {
     return spans(inner(), parts)
   }
 
-  const header = () => {
-    const width = inner()
+  const headerLabel = () => {
     const filtered = props.filterLabel !== "All branches"
-    const label = { text: props.filterLabel, color: props.filterHue ?? (filtered ? props.theme.text : props.theme.muted), bold: filtered }
-    // The mockup's first row: the filter label, the `f` hint, then `↓ latest`
-    // on the right while the log is paused.
-    const hint = { text: "  f filter", color: props.theme.faint }
-    const latest = props.following ? "" : "↓ latest "
-    const cursor = [...label.text].length + [...hint.text].length
-    const gap = Math.max(1, width - cursor - [...latest].length)
-    return spans(width, [
-      label,
-      hint,
-      ...(props.truncated
-        ? [{ text: "   earlier activity not loaded", color: props.theme.warning }]
-        : []),
-      { text: " ".repeat(gap), color: props.theme.faint },
-      ...(latest === "" ? [] : [{ text: latest, color: props.theme.primary, bold: true }]),
-    ])
+    return filtered ? props.filterHue ?? props.theme.text : props.theme.muted
   }
 
   return (
     <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0} height={props.height} paddingLeft={1} overflow="hidden">
-      <LineView width={inner()} spans={header()} />
+      <CellGrid
+        id="banyancode.understory.stream.header"
+        width={Math.max(1, inner())}
+        height={1}
+        background={props.theme.background}
+        draw={(grid) => {
+          const width = Math.max(1, inner())
+          const label = props.filterLabel
+          const filtered = label !== "All branches"
+          grid.text(
+            0,
+            0,
+            truncate(label, width),
+            hover() === "stream:filter" ? mix(headerLabel(), props.theme.text, 0.5) : headerLabel(),
+            undefined,
+            filtered,
+          )
+          grid.hit(0, 0, Math.min(label.length, width), 1, "stream:filter")
+          const latest = props.following ? "" : "↓ latest"
+          const latestStart = width - latest.length
+          if (props.truncated && latestStart > label.length + 4) {
+            grid.text(
+              label.length + 3,
+              0,
+              truncate("earlier activity not loaded", latestStart - label.length - 4),
+              props.theme.warning,
+            )
+          }
+          if (latest === "") return
+          grid.text(
+            latestStart,
+            0,
+            latest,
+            hover() === "stream:latest" ? props.theme.text : props.theme.primary,
+            undefined,
+            true,
+          )
+          grid.hit(latestStart, 0, latest.length, 1, "stream:latest")
+        }}
+        onHit={(region) => {
+          if (region === "stream:filter") {
+            props.onFilter()
+            return
+          }
+          if (region !== "stream:latest" || scroll === undefined) return
+          scroll.scrollTo(Infinity)
+          props.onScroll(scroll, Number.MAX_SAFE_INTEGER, true)
+        }}
+        onMouseMove={(region) => {
+          if (region !== hover()) setHover(region)
+        }}
+      />
       <Show
         when={total() > 0}
         fallback={

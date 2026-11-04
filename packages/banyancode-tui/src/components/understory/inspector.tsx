@@ -1,5 +1,5 @@
 import type { RGBA } from "@opentui/core"
-import { createMemo, For, Show } from "solid-js"
+import { createMemo, createSignal, For, Show } from "solid-js"
 import { formatTokens, truncate } from "../../data/format"
 import { stateGlyph, type AgentSheet, type RosterRow, type RunSheet, type ToolLetter } from "../../data/understory"
 import { durationText, type AgentSpan, type StaleEdit } from "../../data/understory-spans"
@@ -8,12 +8,21 @@ import { kindColor, type Palette } from "../../theme"
 import type { PinnedCall } from "./view"
 import { blastScore, fileName, type GraphData } from "./graph-data"
 import { runClock, spans, stateColor, stateLabel, type Span } from "./layout"
+import { CellGrid } from "./cells"
 import { LineView, type Line } from "./line"
 
 export interface InspectorAsk {
   readonly kind: "permission" | "form"
   readonly title: string
   readonly target: string
+}
+
+/** One button on the sheet's action row: a real mouse target, never a key hint. */
+export interface InspectorAction {
+  readonly id: string
+  readonly label: string
+  readonly tone?: "primary" | "leaf" | "error" | undefined
+  readonly run: () => void
 }
 
 /** One real touch of a file, from a tool call that named it. */
@@ -42,7 +51,11 @@ export interface InspectorProps {
   readonly animations: boolean
   readonly tick: number
   readonly now: () => number
-  readonly actions: readonly string[]
+  readonly actions: readonly InspectorAction[]
+  /** Answer the pending ask, when there is one. */
+  readonly onAnswer: (decision: "once" | "always" | "reject") => void
+  /** Open the selected agent's session (the ask box's form answer). */
+  readonly onOpenSession: () => void
   /** The tile selected in Roots, if any. */
   readonly file: string | undefined
   /** Code-graph facts; absent means the graph is not built. */
@@ -99,9 +112,11 @@ export function wrapText(text: string, width: number): string[] {
 
 /** The File / Call / Run / Agent sheet. One thing at a time, in priority order. */
 export function Inspector(props: InspectorProps) {
+  const [hover, setHover] = createSignal<string>()
   const inner = () => Math.max(4, props.width - 3)
   const actionRows = () => (props.actions.length > 0 ? 2 : 0)
-  const contentHeight = () => Math.max(1, props.height - 1 - actionRows())
+  const askRows = () => (props.ask === undefined ? 0 : 4)
+  const contentHeight = () => Math.max(1, props.height - 1 - actionRows() - askRows())
   const hueOf = (sessionID: string): RGBA => props.hues.get(sessionID) ?? props.theme.leaf
   const row = () => props.row
 
@@ -355,58 +370,10 @@ export function Inspector(props: InspectorProps) {
     blank()
 
     const currentAsk = props.ask
-    if (currentAsk !== undefined) {
-      const border = props.animations
-        ? mix(theme.warning, theme.border, (0.5 + 0.5 * Math.sin(props.tick * Math.PI * 2)) * 0.6)
-        : theme.warning
-      const top = `╭─ ${currentAsk.kind === "form" ? "QUESTION" : "NEEDS YOU"} `
-      push([
-        { text: top, color: border },
-        { text: "─".repeat(Math.max(0, width - top.length - 1)), color: border },
-        { text: "╮", color: border },
-      ])
-      // Every row between the corners is exactly the box's inner width, so the
-      // right border lines up at any width, including the key row.
-      const room = Math.max(0, width - 4)
-      const middle = (parts: readonly Span[]) => {
-        const body = spans(room, parts)
-        const used = body.reduce((total, part) => total + [...part.text].length, 0)
-        push([
-          { text: "│ ", color: border },
-          ...body,
-          { text: `${" ".repeat(Math.max(0, room - used))} │`, color: border },
-        ])
-      }
-      if (currentAsk.kind === "form") {
-        middle([{ text: currentAsk.title, color: theme.text }])
-        middle([{ text: "Enter opens the session", color: theme.muted }])
-      } else {
-        middle([
-          {
-            text: `${currentAsk.title}${currentAsk.target === "" ? "" : `: ${currentAsk.target}`}`,
-            color: theme.text,
-          },
-        ])
-        // The key row keeps all three answers at every width; the wording
-        // shortens rather than letting the right border fall short.
-        const keys = (once: string, always: string, deny: string): Span[] => [
-          { text: "a", color: theme.warning, bold: true },
-          { text: once, color: theme.muted },
-          { text: "A", color: theme.warning, bold: true },
-          { text: always, color: theme.muted },
-          { text: "d", color: theme.warning, bold: true },
-          { text: deny, color: theme.muted },
-        ]
-        const variants = [
-          keys(" allow once  ", " always  ", " deny"),
-          keys(" allow  ", " always  ", " deny"),
-          keys(" once  ", " all  ", " deny"),
-          keys("  ", "  ", " deny"),
-        ]
-        const plain = (parts: readonly Span[]) => parts.reduce((total, part) => total + [...part.text].length, 0)
-        middle(variants.find((parts) => plain(parts) <= room) ?? variants.at(-1)!)
-      }
-      push([{ text: `╰${"─".repeat(Math.max(0, width - 2))}╯`, color: border }])
+    if (currentAsk !== undefined && currentAsk.kind === "form") {
+      // The form's answer is a button on the ask panel above the sheet; the
+      // sheet names where the question came from and stays out of the way.
+      para(`${currentAsk.title} · answer in the session`, theme.muted)
       blank()
     }
 
@@ -507,6 +474,7 @@ export function Inspector(props: InspectorProps) {
   return (
     <box flexDirection="column" width={props.width} height={props.height} flexShrink={0} paddingLeft={2} overflow="hidden">
       <LineView width={inner()} spans={spans(inner(), [{ text: title(), color: props.theme.wood, bold: true }])} />
+      <Show when={props.ask}>{(ask) => <AskBox ask={ask()} width={inner()} theme={props.theme} onAnswer={props.onAnswer} onOpenSession={props.onOpenSession} />}</Show>
       <scrollbox
         id="banyancode.understory.inspector"
         height={contentHeight()}
@@ -524,28 +492,121 @@ export function Inspector(props: InspectorProps) {
           width={inner()}
           spans={spans(inner(), [{ text: "─".repeat(inner()), color: props.theme.border }])}
         />
-        <LineView
-          width={inner()}
-          spans={spans(
-            inner(),
-            props.actions.flatMap((action, index): Span[] => {
-              const split = action.indexOf(" ")
-              const key = split < 0 ? action : action.slice(0, split)
-              const label = split < 0 ? "" : action.slice(split + 1)
-              const tone = label.startsWith("kill")
-                ? props.theme.error
-                : label.startsWith("steer")
-                  ? props.theme.leaf
-                  : props.theme.primary
-              return [
-                ...(index === 0 ? [] : [{ text: "   ", color: props.theme.faint }]),
-                { text: key, color: tone, bold: true },
-                { text: ` ${label}`, color: props.theme.muted },
-              ]
-            }),
-          )}
+        <CellGrid
+          id="banyancode.understory.inspector.actions"
+          width={Math.max(1, inner())}
+          height={1}
+          background={props.theme.background}
+          draw={(grid) => {
+            const theme = props.theme
+            let x = 0
+            for (const action of props.actions) {
+              const label = ` ${action.label} `
+              if (x + label.length > inner()) break
+              const hot = hover() === action.id
+              const tone =
+                action.tone === "error" ? theme.error : action.tone === "leaf" ? theme.leaf : theme.primary
+              grid.text(x, 0, label, tone, hot ? mix(theme.surfaceHigh, theme.text, 0.18) : theme.surfaceHigh, true)
+              grid.hit(x, 0, label.length, 1, action.id)
+              x += label.length + 1
+            }
+          }}
+          onHit={(region) => {
+            props.actions.find((action) => action.id === region)?.run()
+          }}
+          onMouseMove={(region) => {
+            if (region !== hover()) setHover(region)
+          }}
         />
       </Show>
+    </box>
+  )
+}
+
+/**
+ * The pending ask, as a box with real buttons. A permission answers `allow
+ * once` / `always` / `deny`; a question can only be answered in its session, so
+ * it offers `open session` instead.
+ */
+function AskBox(props: {
+  readonly ask: InspectorAsk
+  readonly width: number
+  readonly theme: Palette
+  readonly onAnswer: (decision: "once" | "always" | "reject") => void
+  readonly onOpenSession: () => void
+}) {
+  const border = () => props.theme.warning
+  const heading = () => (props.ask.kind === "form" ? "QUESTION" : "NEEDS YOU")
+  const body = () => {
+    const room = Math.max(0, props.width - 4)
+    const text =
+      props.ask.kind === "form"
+        ? props.ask.title
+        : `${props.ask.title}${props.ask.target === "" ? "" : `: ${props.ask.target}`}`
+    const line = truncate(text, room)
+    return spans(props.width, [
+      { text: "│ ", color: border() },
+      { text: line, color: props.theme.text },
+      { text: `${" ".repeat(Math.max(0, room - line.length))} │`, color: border() },
+    ])
+  }
+  const rule = (text: string): Span[] =>
+    spans(props.width, [
+      { text, color: border() },
+      { text: "─".repeat(Math.max(0, props.width - text.length - 1)), color: border() },
+      { text: "╮", color: border() },
+    ])
+  const buttons = (): readonly { id: "once" | "always" | "reject" | "open"; label: string }[] =>
+    props.ask.kind === "form"
+      ? [{ id: "open", label: "open session" }]
+      : [
+          { id: "once", label: props.width >= 40 ? "allow once" : "allow" },
+          { id: "always", label: "always" },
+          { id: "reject", label: "deny" },
+        ]
+  const [hover, setHover] = createSignal<string>()
+  return (
+    <box flexDirection="column" width={props.width} flexShrink={0}>
+      <LineView width={props.width} spans={rule(`╭─ ${heading()} `)} />
+      <LineView width={props.width} spans={body()} />
+      <LineView
+        width={props.width}
+        spans={spans(props.width, [{ text: `╰${"─".repeat(Math.max(0, props.width - 2))}╯`, color: border() }])}
+      />
+      <CellGrid
+        id="banyancode.understory.inspector.ask"
+        width={Math.max(1, props.width)}
+        height={1}
+        background={props.theme.background}
+        draw={(grid) => {
+          let x = 0
+          for (const button of buttons()) {
+            const label = ` ${button.label} `
+            if (x + label.length > props.width) break
+            const hot = hover() === button.id
+            grid.text(
+              x,
+              0,
+              label,
+              button.id === "reject" ? props.theme.error : props.theme.warning,
+              hot ? mix(props.theme.surfaceHigh, props.theme.text, 0.18) : props.theme.surfaceHigh,
+              true,
+            )
+            grid.hit(x, 0, label.length, 1, button.id)
+            x += label.length + 1
+          }
+        }}
+        onHit={(region) => {
+          if (region === "open") {
+            props.onOpenSession()
+            return
+          }
+          if (region === "once" || region === "always" || region === "reject") props.onAnswer(region)
+        }}
+        onMouseMove={(region) => {
+          if (region !== hover()) setHover(region)
+        }}
+      />
     </box>
   )
 }

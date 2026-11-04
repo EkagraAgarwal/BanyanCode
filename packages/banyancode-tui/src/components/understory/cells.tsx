@@ -293,7 +293,11 @@ export interface CellGridProps {
   readonly onHit?: ((region: string, grid: Grid) => void) | undefined
   readonly onMouseMove?: ((region: string | undefined, grid: Grid) => void) | undefined
   /** Wheel over the grid: `direction` is the wheel, `delta` the reported steps. */
-  readonly onScroll?: ((direction: "up" | "down" | "left" | "right", delta: number) => void) | undefined
+  readonly onScroll?: ((
+    direction: "up" | "down" | "left" | "right",
+    delta: number,
+    modifiers?: { readonly shift: boolean; readonly alt: boolean; readonly ctrl: boolean },
+  ) => void) | undefined
   /**
    * A drag: press on a cell, move across cells, release. `cell` is grid-local,
    * and `region` is the hit region under the pointer (undefined off any).
@@ -385,7 +389,7 @@ export function CellGrid(props: CellGridProps) {
       onMouseScroll={(event) => {
         const scroll = event.scroll
         if (props.onScroll === undefined || scroll === undefined) return
-        props.onScroll(scroll.direction, scroll.delta)
+        props.onScroll(scroll.direction, scroll.delta, event.modifiers)
       }}
     />
   )

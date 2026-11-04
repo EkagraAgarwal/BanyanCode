@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { RGBA } from "@opentui/core"
+import { batch } from "solid-js"
 import type { SessionMessageInfo } from "@opencode/client"
 import type { ResolvedTheme } from "@opencode/theme/tui"
 import { CellGridRenderable, Grid } from "../src/components/understory/cells"
@@ -604,19 +605,44 @@ test("the overview leaves the future blank and marks the playhead when replaying
 // Time window
 // ---------------------------------------------------------------------------
 
-test("the window pages forward thirty percent only past the ninety percent mark", () => {
+test("the live window follows the newest event, not the clock", () => {
   const columns = 60
   const props = lensProps({ scenario: buildScenario(), size: SIZE, now: at(10) })
-  const pressing = (seconds: number) => props.view.window({ start: T0, columns, now: at(seconds) })
-  const at10 = pressing(10)
-  const at30 = pressing(30)
-  const at37 = pressing(37)
-  expect(at30.a).toBe(at10.a)
-  expect(at37.a).toBe(at10.a)
-  const span = at10.b - at10.a
+  const first = props.view.window({ start: T0, columns, newest: at(10) })
+  // The clock advancing without a new event must not move the window.
+  const later = props.view.window({ start: T0, columns, newest: at(10), now: at(200) })
+  expect(later.a).toBe(first.a)
+  expect(later.b).toBe(first.b)
+  const span = first.b - first.a
   expect(span).toBe(columns * 700)
-  const paged = pressing(38)
-  expect(paged.a).toBeCloseTo(at10.a + span * 0.3, 6)
+
+  // An event past the right edge moves it minimally, restoring the margin.
+  const moved = props.view.window({ start: T0, columns, newest: at(200) })
+  expect(moved.a).toBeGreaterThan(first.a)
+  expect(moved.b).toBeCloseTo(at(200) + 1_400, 6)
+})
+
+test("advancing the clock with no event leaves every lane cell unchanged", async () => {
+  const scenario = buildScenario()
+  const early = lensProps({ scenario, size: SIZE, now: at(46) })
+  const late = lensProps({ scenario, size: SIZE, now: at(200) })
+  const first = await mount(() => <TraceLens {...early} playhead={at(46)} />, {
+    width: early.width,
+    height: early.height,
+  })
+  const second = await mount(() => <TraceLens {...late} playhead={at(46)} />, {
+    width: late.width,
+    height: late.height,
+  })
+  try {
+    await first.renderOnce()
+    await second.renderOnce()
+    // The coarse playhead is the same; the raw clock behind the view is not.
+    expect(second.captureCharFrame()).toBe(first.captureCharFrame())
+  } finally {
+    first.renderer.destroy()
+    second.renderer.destroy()
+  }
 })
 
 test("an ended run fits the whole run instead of the live page", () => {
@@ -661,7 +687,7 @@ test("a twenty-one agent run fills one row each, never overflows, and scrolls wi
       row.sessionID,
       index === 0
         ? []
-        : [tool(`f${index}`, "R", 20 + index * 0.5, undefined, "read", `f${index}.ts`)],
+        : [tool(`f${index}`, "R", 20 + index * 0.5, 40, "read", `f${index}.ts`)],
     ]),
   )
   const wide = lensProps({ scenario: { fixture, rows, spans }, size: SIZE, now: at(40) })
@@ -782,14 +808,15 @@ test("the empty run says where lanes will appear and how to grow them", async ()
   }
 })
 
-test("the legend names every kind and swaps the hint when zoomed", async () => {
+test("the legend names every kind, and only a zoomed view offers a reset", async () => {
   const scenario = buildScenario()
   const plain = lensProps({ scenario, size: SIZE, now: at(46) })
   const app = await render(plain)
   try {
     const frame = app.captureCharFrame()
     expect(frame).toContain("R read  S search  E edit  $ shell  V verify  W web")
-    expect(frame).toContain("drag overview to zoom")
+    // The old visible zoom hint is gone; the gesture is still the overview drag.
+    expect(frame).not.toContain("drag overview to zoom")
   } finally {
     app.renderer.destroy()
   }
@@ -801,7 +828,7 @@ test("the legend names every kind and swaps the hint when zoomed", async () => {
   expect(zoomed.view.scale()).toBeLessThanOrEqual(TRACE_SCALE_MAX)
   const zoomedApp = await render(zoomed)
   try {
-    expect(zoomedApp.captureCharFrame()).toContain("0 reset zoom")
+    expect(zoomedApp.captureCharFrame()).toContain("reset zoom")
   } finally {
     zoomedApp.renderer.destroy()
   }
@@ -856,8 +883,11 @@ test("clicking a lane selects it, a block pins it, and the ruler moves the playh
     await app.mockMouse.click(out.labelX + 2, block)
     expect(selected.at(-1)).toBe("ses_c1")
 
-    // A block pins its call as well as selecting the lane.
-    await app.mockMouse.click(2, block)
+    // A block pins its call as well as selecting the lane. The event-followed
+    // window puts the read block further right than the old clock-paged one.
+    const win = props.view.window({ start: scenario.rows[0]!.startedAt, columns: out.history, newest: at(41) })
+    const column = Math.max(1, Math.round(((at(13.5) - win.a) / (win.b - win.a)) * out.history))
+    await app.mockMouse.click(out.x + column, block)
     expect(selected.at(-1)).toBe("ses_c1")
     expect(pins.at(-1)?.sessionID).toBe("ses_c1")
     expect(pins.at(-1)?.spanID).toBe("c1:read")
@@ -869,6 +899,75 @@ test("clicking a lane selects it, a block pins it, and the ruler moves the playh
     expect(props.view.t()).toBeDefined()
     await app.renderOnce()
     expect(app.captureCharFrame()).toContain("AT ")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("older history loads only once the left edge reaches a lane's oldest span", async () => {
+  const scenario = buildScenario()
+  const spans = new Map(scenario.spans)
+  spans.set("ses_c1", [
+    ...(scenario.spans.get("ses_c1") ?? []),
+    tool("c1:late", "S", 300, 301, "grep", "late"),
+  ])
+  const props = lensProps({ scenario, size: { width: 100, height: 30 }, now: at(320), spans })
+  const asked: string[] = []
+  const app = await mount(
+    () => (
+      <TraceLens
+        {...props}
+        historyMore={() => true}
+        historyLoading={() => false}
+        loadOlder={(sessionID) => asked.push(sessionID)}
+      />
+    ),
+    { width: props.width, height: props.height },
+  )
+  try {
+    await app.renderOnce()
+    await app.renderOnce()
+    // The window still sits near the newest event, far from the oldest spans.
+    expect(asked).toEqual([])
+    batch(() => {
+      for (let step = 0; step < 12; step += 1) {
+        props.view.scrollTime({ start: props.rows[0]!.startedAt, newest: at(301), fraction: -1 })
+      }
+    })
+    await app.renderOnce()
+    await app.renderOnce()
+    expect(asked.length).toBeGreaterThan(0)
+    // One page per session, not one per frame.
+    expect(new Set(asked).size).toBe(asked.length)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a horizontal wheel scrolls time and pauses following", async () => {
+  const scenario = buildScenario()
+  const props = lensProps({ scenario, size: { width: 100, height: 30 }, now: at(46) })
+  const columns = traceLayout(props.width).history
+  const start = props.rows[0]!.startedAt
+  const app = await render(props)
+  try {
+    const before = props.view.window({ start, columns, newest: at(41) })
+    expect(props.view.following()).toBe(true)
+    const y = props.geometry.overview + props.geometry.ruler + 1
+    await app.mockMouse.scroll(10, y, "left")
+    await app.renderOnce()
+    expect(props.view.following()).toBe(false)
+    const paused = props.view.window({ start, columns, newest: at(41) })
+    expect(paused.a).toBeLessThan(before.a)
+    // A newer event while paused must not move the view.
+    const later = props.view.window({ start, columns, newest: at(90) })
+    expect(later.a).toBe(paused.a)
+    expect(later.b).toBe(paused.b)
+    // `latest` resumes at the newest event.
+    props.view.latest()
+    const resumed = props.view.window({ start, columns, newest: at(90) })
+    expect(props.view.following()).toBe(true)
+    expect(resumed.b).toBeGreaterThan(later.b)
   } finally {
     app.renderer.destroy()
   }

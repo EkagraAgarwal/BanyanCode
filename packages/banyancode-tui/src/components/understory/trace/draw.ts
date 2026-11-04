@@ -275,6 +275,8 @@ export interface LaneInput {
   readonly at: number
   /** The live clock, for open spans. */
   readonly now: number
+  /** The newest event any lane has; open spans never reach past it. */
+  readonly newest?: number | undefined
   readonly live: boolean
   readonly pinned: string | undefined
   /** Live children of a `blocked` row, for its now line. */
@@ -296,6 +298,10 @@ export function drawLane(grid: Grid, input: LaneInput): void {
   const blockY = y + band.block
   const spanMs = Math.max(1, window.b - window.a)
   const width = layout.history
+  // An open span only reaches the newest known event; it may breathe out to
+  // the clock only when the clock is already inside the window.
+  const spanEnd = (span: AgentSpan): number =>
+    span.t1 ?? (input.now <= window.b ? input.now : Math.max(span.t0, input.newest ?? input.now))
 
   if (input.selected) grid.fill(layout.x, y, layout.inner, Math.min(band.tint, height), theme.surfaceHigh)
   grid.hit(layout.x, y, layout.inner, height, `trace:lane:${row.sessionID}`)
@@ -323,7 +329,7 @@ export function drawLane(grid: Grid, input: LaneInput): void {
   for (const span of spans) {
     const tinted = span.kind === "think" || span.kind === "write"
     if (span.kind === "wait" || (tinted && height > 1)) continue
-    const end = span.t1 ?? input.now
+    const end = spanEnd(span)
     if (end < window.a || span.t0 > window.b) continue
     let color: RGBA =
       span.kind === "tool"
@@ -381,7 +387,7 @@ export function drawLane(grid: Grid, input: LaneInput): void {
   const pix = (t: number) => ((t - window.a) / spanMs) * width
   const breath = 0.5 + 0.5 * Math.sin(input.tick * Math.PI * 2)
   for (const span of spans) {
-    const end = span.t1 ?? input.now
+    const end = spanEnd(span)
     if (end < window.a || span.t0 > window.b) continue
     const c0 = Math.ceil(pix(span.t0))
     const c1 = Math.floor(pix(end))
@@ -637,8 +643,14 @@ export function drawLegend(grid: Grid, input: LegendInput): void {
       cursor += 2
     }
   }
-  const hint = input.zoomed ? "0 reset zoom" : "drag overview to zoom"
-  if (cursor - layout.x + 24 < layout.inner) grid.right(layout.x + layout.inner, y, hint, theme.faint)
+  // Zoom is a drag on the overview; the only visible control is the way back,
+  // and it is drawn only while a zoom is active. No key hint occupies the row.
+  if (!input.zoomed) return
+  const hint = "reset zoom"
+  if (cursor - layout.x + hint.length + 2 >= layout.inner) return
+  const start = layout.x + layout.inner - hint.length
+  grid.text(start, y, hint, theme.faint)
+  grid.hit(start, y, hint.length, 1, "trace:reset-zoom")
 }
 
 export interface EmptyInput {

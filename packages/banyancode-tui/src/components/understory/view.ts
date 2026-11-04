@@ -4,7 +4,13 @@ import { createSignal, type Accessor } from "solid-js"
 import type { RosterRow } from "../../data/understory"
 import type { AgentSpan } from "../../data/understory-spans"
 import type { Palette } from "../../theme"
-import { TRACE_SECONDS_PER_COLUMN, traceWindow, type RowGeometry, type TraceWindow } from "./layout"
+import {
+  followWindow,
+  scrollWindow,
+  TRACE_SECONDS_PER_COLUMN,
+  type RowGeometry,
+  type TraceWindow,
+} from "./layout"
 
 /**
  * Shared state for the Agents tab. The lenses read it; the shell owns the keys
@@ -16,24 +22,14 @@ export type Lens = "trace" | "roots" | "stream"
 
 export const LENSES: readonly Lens[] = ["trace", "roots", "stream"]
 
+/**
+ * The lenses are mouse targets now, so no key maps to one: `lensLabel` names
+ * them for the tab strip, and nothing else decides which one is showing.
+ */
 export function lensLabel(lens: Lens): string {
   if (lens === "trace") return "Trace"
   if (lens === "roots") return "Roots"
   return "Stream"
-}
-
-/**
- * The lens a real digit press selects. A keymap match is not proof of a press:
- * `@opentui/keymap` adds the physical key's base-layout character as an extra
- * match (so a digit-row key can match a bare digit), and the host's ctrl+] tab
- * switch carries that base key. Only the event's own name is proof, so the
- * lens commands pass their `KeyEvent` here and a fallback match is ignored.
- */
-export function lensForKey(name: string | undefined): Lens | undefined {
-  if (name === "1") return "trace"
-  if (name === "2") return "roots"
-  if (name === "3") return "stream"
-  return undefined
 }
 
 /** A tool span pinned in Trace; the inspector's Call sheet reads it. */
@@ -79,6 +75,16 @@ export interface WindowInput {
   readonly columns: number
   /** The playhead the window must follow; defaults to the live clock. */
   readonly now?: number | undefined
+  /** Newest event any loaded lane has; a live window follows this, not `now`. */
+  readonly newest?: number | undefined
+}
+
+export interface ScrollTimeInput {
+  readonly start: number
+  readonly newest: number
+  readonly end?: number | undefined
+  /** Fraction of the visible width to move; negative goes back in time. */
+  readonly fraction: number
 }
 
 export interface UnderstoryView {
@@ -95,6 +101,13 @@ export interface UnderstoryView {
   /** An explicit window, dragged or zoomed; `undefined` uses the fitted one. */
   readonly win: Accessor<TraceWindow | undefined>
   readonly setWin: (window: TraceWindow | undefined) => void
+  /** True while the live window follows the newest event. */
+  readonly following: Accessor<boolean>
+  readonly setFollowing: (following: boolean) => void
+  /** Resume following the newest event, keeping the current zoom. */
+  readonly latest: () => void
+  /** Scroll the time axis by a fraction of the visible width; clamps to the run. */
+  readonly scrollTime: (input: ScrollTimeInput) => void
   /** Seconds per column for the window on screen. */
   readonly scale: Accessor<number>
   /** Zoom 30% in or out around the playhead. */
@@ -115,7 +128,7 @@ export interface UnderstoryView {
 }
 
 /** The playhead is a scrub, so every action that would write to the run is off. */
-export const REPLAY_OFF = "return to live (l) first"
+export const REPLAY_OFF = "back to live first"
 
 /**
  * The lens' replay state, for a surface that has no view of its own: the
@@ -171,9 +184,11 @@ export function createUnderstoryView(input: { readonly now: () => number; readon
   const [filter, setFilter] = createSignal(false)
   const [overlay, setOverlay] = createSignal(false)
 
+  const [following, setFollow] = createSignal(true)
+
   // The last window and column count the lens asked for, so `+`/`-` can zoom
   // around the playhead before the lens has been drawn again.
-  let latest: TraceWindow | undefined
+  let latestWindow: TraceWindow | undefined
   let latestColumns = 1
 
   const live = () => t() === undefined
@@ -185,34 +200,39 @@ export function createUnderstoryView(input: { readonly now: () => number; readon
     return { a: start, b: start + span, scale: span / 1000 / Math.max(1, columns) }
   }
 
-  /** A window around the playhead at the current scale, kept inside the run. */
-  const around = (start: number, ceiling: number, columns: number): TraceWindow => {
-    const span = windowSpan()
-    const a = clamp(viewT() - span * PLAYHEAD_LEAD, start, Math.max(start, ceiling - span))
-    return { a, b: a + span, scale: scaleValue() }
-  }
+  /** The window a first call can assume before the lens has drawn one. */
+  const initial = (start: number): TraceWindow => ({ a: start, b: start + windowSpan(), scale: scaleValue() })
 
-  const computed = (range: WindowInput): TraceWindow => {
+  const computed = (range: WindowInput, fixed: TraceWindow | undefined): TraceWindow => {
     const columns = Math.max(1, Math.floor(range.columns))
     latestColumns = columns
     const start = range.start
+    const newest = Math.max(start, range.newest ?? start)
     const nowMs = range.now ?? viewT()
-    if (range.end !== undefined) {
-      const whole = fit(start, range.end, columns)
-      // An ended run fits whole, until the user zooms: then it is a window
-      // around the playhead at the zoomed scale.
-      return scaleValue() === TRACE_SECONDS_PER_COLUMN ? whole : around(start, Math.max(range.end, start + 1), columns)
+    const whole = range.end === undefined ? undefined : fit(start, Math.max(range.end, start + 1), columns)
+
+    if (!live()) {
+      // Replay moves only the playhead. The window holds still until the
+      // playhead leaves it, then slides just far enough to bring it back.
+      const base = fixed ?? latestWindow ?? initial(start)
+      if (nowMs >= base.a && nowMs <= base.b) return base
+      const span = Math.max(1, base.b - base.a)
+      const ceiling = Math.max(start + 1, range.end ?? newest + span / 4)
+      const a = clamp(nowMs < base.a ? nowMs : nowMs - span, start, Math.max(start, ceiling - span))
+      return { a, b: a + span, scale: base.scale }
     }
-    if (!live()) return around(start, Math.max(nowMs, start + windowSpan()), columns)
-    // Live: a fixed scale that pages forward in 30% steps, in seconds, which is
-    // the unit `traceWindow` and its tests speak.
-    const paged = traceWindow({
-      start: start / 1000,
-      now: nowMs / 1000,
+
+    // An ended, unzoomed run fits whole; a zoom pins an explicit window.
+    if (whole !== undefined && fixed === undefined && scaleValue() === TRACE_SECONDS_PER_COLUMN) return whole
+    if (fixed !== undefined) return fixed
+    if (!following()) return latestWindow ?? followWindow({ start, newest, columns, scale: scaleValue() })
+    return followWindow({
+      start,
+      newest,
       columns,
       scale: scaleValue(),
+      ...(latestWindow === undefined ? {} : { anchor: latestWindow.a }),
     })
-    return { a: paged.a * 1000, b: paged.b * 1000, scale: paged.scale }
   }
 
   return {
@@ -222,27 +242,44 @@ export function createUnderstoryView(input: { readonly now: () => number; readon
     setT: (value) => {
       setT(value)
       setReplaying(value !== undefined)
+      // Returning to live also returns the window to the newest event.
+      if (value === undefined) {
+        setFollow(true)
+        setWin(undefined)
+      }
     },
     live,
     viewT,
     window: (range) => {
-      const fixed = win()
-      if (fixed !== undefined) {
-        latest = fixed
-        latestColumns = Math.max(1, Math.floor(range.columns))
-        return fixed
-      }
-      const next = computed(range)
-      latest = next
+      const next = computed(range, win())
+      latestWindow = next
+      latestColumns = Math.max(1, Math.floor(range.columns))
       return next
     },
     win,
     setWin,
+    following,
+    setFollowing: (value) => {
+      setFollow(value)
+      if (!value && win() === undefined && latestWindow !== undefined) setWin(latestWindow)
+    },
+    latest: () => {
+      setFollow(true)
+      setWin(undefined)
+    },
+    scrollTime: (input) => {
+      const base = win() ?? latestWindow ?? initial(input.start)
+      const next = scrollWindow({ window: base, start: input.start, newest: input.newest, fraction: input.fraction })
+      setWin(next.window)
+      setFollow(next.following)
+      latestWindow = next.window
+      latestColumns = Math.max(1, Math.round((next.window.b - next.window.a) / 1000 / Math.max(0.001, next.window.scale)))
+    },
     scale: () => win()?.scale ?? scaleValue(),
     zoom: (direction) => {
       const base =
         win() ??
-        latest ?? {
+        latestWindow ?? {
           a: 0,
           b: DEFAULT_SPAN_MS,
           scale: TRACE_SECONDS_PER_COLUMN,
@@ -257,10 +294,13 @@ export function createUnderstoryView(input: { readonly now: () => number; readon
       const a = clamp(viewT() - span * PLAYHEAD_LEAD, 0, Math.max(0, ceiling - span))
       setScaleValue(span / 1000 / columns)
       setWin({ a, b: a + span, scale: span / 1000 / columns })
+      setFollow(false)
     },
     resetZoom: () => {
       setWin(undefined)
       setScaleValue(TRACE_SECONDS_PER_COLUMN)
+      setFollow(true)
+      latestWindow = undefined
     },
     pinned,
     pinCall: setPinned,

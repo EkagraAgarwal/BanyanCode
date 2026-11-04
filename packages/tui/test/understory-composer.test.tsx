@@ -118,7 +118,7 @@ async function openAgents(setup: Awaited<ReturnType<typeof fixture>>) {
   await setup.waitFor(() => setup.renderer.currentFocusedRenderable?.id === "session-panel")
   setup.mockInput.pressKey("]", { ctrl: true })
   await setup.waitForFrame(
-    (frame) => frame.includes("1 Trace") && (frame.includes("BRANCHES") || frame.includes("BRCH")),
+    (frame) => frame.includes("Trace") && (frame.includes("BRANCHES") || frame.includes("BRCH")),
     { maxPasses: 300 },
   )
   await setup.waitFor(() => setup.renderer.currentFocusedRenderable?.id === "session-panel")
@@ -180,7 +180,7 @@ test("the Agents tab routes @branch through the composer and Chat keeps the plai
   // Leaving the tab restores the plain composer: no route label, no tab placeholder.
   setup.mockInput.pressEscape()
   await setup.waitFor(() => setup.renderer.root.findDescendantById("session-panel") === undefined)
-  await setup.waitForFrame((frame) => !frame.includes("1 Trace"), { maxPasses: 200 })
+  await setup.waitForFrame((frame) => !frame.includes("Trace"), { maxPasses: 200 })
   const back = setup.captureCharFrame()
   expect(back).not.toContain("→ coder-1")
   expect(back).not.toContain("Message build, or @ to steer one branch")

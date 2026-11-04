@@ -171,13 +171,12 @@ export interface ChromeFooterProps {
  * The shared top bar. The classic layout renders the v1 arrangement the owner
  * kept (brand, project, statuses and key hints, then the tab row and its
  * separator); the Trunk layout renders the redesign's two-row chrome with the
- * canopy rule. The host owns the setting, so a layout switch remounts the right
- * one. The Agents tab always wears the canopy chrome: it is full-bleed, and the
- * classic footer's "need attention" count is not part of that surface.
+ * canopy rule. Only `session_layout` picks one: every tab wears the same chrome
+ * in a given layout, so switching tabs never moves a row or a column.
  */
 export function SessionHeader(props: ChromeHeaderProps) {
   return (
-    <Show when={canopyChrome(props.context)} fallback={<ClassicHeader {...props} />}>
+    <Show when={props.context.ui.sessionLayout() === "trunk"} fallback={<ClassicHeader {...props} />}>
       <TrunkHeader {...props} />
     </Show>
   )
@@ -186,15 +185,10 @@ export function SessionHeader(props: ChromeHeaderProps) {
 /** The shared bottom row; see SessionHeader for how the layout picks one. */
 export function SessionFooter(props: ChromeFooterProps) {
   return (
-    <Show when={canopyChrome(props.context)} fallback={<ClassicFooter {...props} />}>
+    <Show when={props.context.ui.sessionLayout() === "trunk"} fallback={<ClassicFooter {...props} />}>
       <TrunkFooter {...props} />
     </Show>
   )
-}
-
-function canopyChrome(context: Context): boolean {
-  if (context.ui.sessionLayout() === "trunk") return true
-  return context.ui.panel.current()?.name === PANEL.agents
 }
 
 const CLASSIC_PILLS_MIN_WIDTH = 72
@@ -291,8 +285,12 @@ function ClassicHeader(props: ChromeHeaderProps) {
 
 /**
  * The classic bottom row, as the v2-base release drew it: project and branch on
- * the left, modes and the always-visible attention count on the right, then the
- * v1 key hint when there is room.
+ * the left, modes and the attention line on the right, then the v1 key hint
+ * when there is room. Every tab keeps the same geometry. On the Agents tab the
+ * attention slot names the agent that needs you (the panel publishes that line
+ * through `agentsStatus`) instead of a bare count, and clicking it selects that
+ * agent. With nothing to say the count still shows while something is waiting,
+ * and is absent at zero: the tab has already said all there is to say.
  */
 function ClassicFooter(props: ChromeFooterProps) {
   const theme = () => palette(props.context.theme)
@@ -305,6 +303,9 @@ function ClassicFooter(props: ChromeFooterProps) {
     return current ? data.location.vcs.info(current)?.branch.current : undefined
   })
   const attention = createMemo(() => attentionBreakdown(props.context, props.sessionID).count)
+  const onAgents = () => props.context.ui.panel.current()?.name === PANEL.agents
+  const status = () => (onAgents() ? agentsStatus() : undefined)
+  const message = () => (status()?.text === undefined || status()!.text === "" ? undefined : status()!.text)
   return (
     <box flexDirection="row" flexShrink={0} width="100%" gap={2} paddingLeft={2} paddingRight={2}>
       <text fg={theme().muted} flexShrink={1} wrapMode="none">
@@ -322,9 +323,34 @@ function ClassicFooter(props: ChromeFooterProps) {
           [swarm]
         </text>
       </Show>
-      <text fg={attention() > 0 ? theme().error : theme().success} flexShrink={0}>
-        {`▲ ${attention()} need attention`}
-      </text>
+      <Show when={onAgents()}>
+        <Show
+          when={message()}
+          fallback={
+            <Show when={attention() > 0}>
+              <text fg={theme().error} flexShrink={0}>
+                {`▲ ${attention()} need attention`}
+              </text>
+            </Show>
+          }
+        >
+          {(text) => (
+            <text
+              fg={status()?.tone === "error" ? theme().error : theme().warning}
+              flexShrink={1}
+              wrapMode="none"
+              onMouseUp={() => status()?.onAttention?.()}
+            >
+              {text()}
+            </text>
+          )}
+        </Show>
+      </Show>
+      <Show when={!onAgents()}>
+        <text fg={attention() > 0 ? theme().error : theme().success} flexShrink={0}>
+          {`▲ ${attention()} need attention`}
+        </text>
+      </Show>
       <Show when={dimensions().width >= CLASSIC_FOOTER_HINT_MIN_WIDTH}>
         <text fg={theme().muted} flexShrink={0}>
           ^p cmd · / search
@@ -548,6 +574,7 @@ function TrunkFooter(props: ChromeFooterProps) {
               fg={agentsStatus()?.tone === "error" ? theme().error : theme().warning}
               flexShrink={1}
               wrapMode="none"
+              onMouseUp={() => agentsStatus()?.onAttention?.()}
             >
               {agents().text}
             </text>

@@ -99,7 +99,7 @@ test("the route label names the destination, the refusal, or live replay", () =>
     tone: "warning",
   })
   expect(composerRouteLabel("plain text", ROWS, false)).toEqual({
-    text: "replaying: l returns to live",
+    text: "replaying: back to live first",
     tone: "warning",
   })
 })
@@ -212,7 +212,7 @@ test("replay refuses every send, plain text included, and keeps it", async () =>
     ).toEqual({ handled: true, retain: true })
   }
   expect(calls).toBe(0)
-  expect(messages.every((message) => message.includes("return to live"))).toBe(true)
+  expect(messages.every((message) => message.includes("back to live"))).toBe(true)
 })
 
 test("a refused or failed steer keeps the text and surfaces the reason", async () => {
@@ -301,9 +301,9 @@ test("registering the tab wires submit, picker and route label, and cleans all t
   expect(host.resolvers[0]!("@coder-2 go")?.text).toBe("→ coder-2")
 
   live = false
-  expect(host.resolvers[0]!("")?.text).toBe("replaying: l returns to live")
+  expect(host.resolvers[0]!("")?.text).toBe("replaying: back to live first")
   expect(await host.interceptors[0]!("@coder-2 go")).toEqual({ handled: true, retain: true })
-  expect(said.at(-1)).toContain("return to live")
+  expect(said.at(-1)).toContain("back to live")
 
   dispose()
   expect(host.interceptors).toHaveLength(0)
