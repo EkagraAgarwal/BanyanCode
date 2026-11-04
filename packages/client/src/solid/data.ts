@@ -214,6 +214,11 @@ function createSync() {
   // that window are already covered, since the reload has not read anything yet.
   type Pending = { promise: Promise<void>; invalidated: boolean; started: boolean }
   const state = new Map<string, true | Pending>()
+  // A global invalidation means the event stream was lost: everything this
+  // store holds may have changed on the server, so the next load is a resync
+  // rather than a refresh. Loads read it at execution time (not when the
+  // closure is created) so a re-run queued by the invalidation sees the bump.
+  let resets = 0
   const start = (key: string, load: () => Promise<void>, wait?: Promise<void>) => {
     const entry: Pending = { promise: Promise.resolve(), invalidated: false, started: !wait }
     state.set(key, entry)
@@ -245,6 +250,10 @@ function createSync() {
     has(key: string) {
       return state.has(key)
     },
+    /** Bumped by every global invalidation; a load can tell a resync from a refresh. */
+    resets() {
+      return resets
+    },
     pending(key: string) {
       const active = state.get(key)
       return active !== undefined && active !== true
@@ -256,6 +265,7 @@ function createSync() {
         if (active !== undefined && active !== true && active.started) active.invalidated = true
         return
       }
+      resets += 1
       state.forEach((active, current) => {
         if (active === true) state.delete(current)
         if (active !== true && active.started) active.invalidated = true
@@ -325,6 +335,8 @@ export function createData(config: CreateDataInput) {
     Object.values(store.session.info).toSorted((a, b) => b.time.updated - a.time.updated),
   )
   const messageIndex = new Map<string, Map<string, number>>()
+  // The sync reset counter each session's transcript was last loaded under.
+  const messageResets = new Map<string, number>()
   const stored = (message: SessionMessageInfo) => (config.omitToolFileData ? omitMessageFileData(message) : message)
   const sync = createSync()
   let activeUpdates: Map<string, DataSessionStatus | undefined> | undefined
@@ -1826,6 +1838,11 @@ export function createData(config: CreateDataInput) {
         sync(sessionID: string) {
           return sync.run(`session.message:${sessionID}`, async () => {
             const started = deletionEpoch
+            // A reconnect bumps the sync reset counter. That run is a resync:
+            // the newest window replaces the transcript instead of layering on
+            // history the server may have deleted while the stream was down.
+            const resync = messageResets.get(sessionID) !== sync.resets()
+            messageResets.set(sessionID, sync.resets())
             const response = await api()
               .message.list({
                 sessionID,
@@ -1848,8 +1865,10 @@ export function createData(config: CreateDataInput) {
             )
             // Older pages already appended by `loadMore` are history this
             // newest-window fetch knows nothing about. Keeping them means an
-            // append that lands before a replace cannot be wiped by it.
-            const oldest = fetched[0]?.time.created
+            // append that lands before a replace cannot be wiped by it. A
+            // resync is the exception: the stream was down, so a row the server
+            // no longer has must leave with the window that replaced it.
+            const oldest = resync ? undefined : fetched[0]?.time.created
             const older =
               oldest === undefined
                 ? []
