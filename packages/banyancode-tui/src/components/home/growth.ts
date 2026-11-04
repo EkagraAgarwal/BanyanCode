@@ -3,23 +3,30 @@ import { createSignal } from "solid-js"
 /** Seconds until the Home tree is fully grown. */
 export const GROWTH_END = 6.75
 
-/** 12 fps for both the growth and the ambient loop. The interval owns the animation. */
+/** 12 fps for the growth itself. The interval owns the animation. */
 export const GROWTH_TICK_MS = 1000 / 12
+
+/**
+ * 9 fps for the ambient sparkle that follows growth. The twinkle is a colour
+ * flash on a still tree, so it reads the same a little slower, and every frame
+ * it does not draw is a frame Home does not pay for.
+ */
+export const AMBIENT_TICK_MS = 1000 / 9
 
 export type Growth = {
   /** Reactive seconds of growth, pinned to `GROWTH_END` once finished. */
   elapsed(): number
-  /** Reactive seconds of the ambient loop: runs during growth, then freezes on the last frame. */
+  /** Reactive seconds of the ambient loop: runs during growth and afterwards, frozen while paused. */
   ambient(): number
   /** Reactive, true once the final frame has been reached. */
   done(): boolean
   /** Idempotent: only the first call starts the clock (or jumps straight to finished when animations are off). */
   start(): void
-  /** Skips growth and jumps to the final frame, stopping the clock. */
+  /** Skips growth and jumps to the final frame. The ambient loop keeps running unless paused. */
   finish(): void
   /** Stops the loop, keeping both clocks where they are. Idempotent; leaves no timer. */
   pause(): void
-  /** Restarts the loop while the tree is still growing; a finished tree has nothing left to animate. */
+  /** Restarts the loop from the frozen clocks, or starts it on first use. Never replays growth. */
   resume(): void
 }
 
@@ -49,11 +56,38 @@ export function createGrowth(options: {
   // `done()` here would re-enter this write and recurse.
   let settled = false
   let timer: ReturnType<typeof setInterval> | undefined
+  // Both clocks are measured against the instant the current timer was armed,
+  // so switching the rate mid-flight restarts the measurement with no jump.
+  let origin = 0
+  let elapsedOrigin = 0
+  let ambientOrigin = 0
 
   const stop = () => {
     if (timer === undefined) return
     cancel(timer)
     timer = undefined
+  }
+  const tick = () => {
+    const dt = (now() - origin) / 1000
+    // The ambient clock never stops once the tree is done: that is the sparkle.
+    ambient = ambientOrigin + dt
+    setAmbient(ambient)
+    if (settled) return
+    const next = elapsedOrigin + dt
+    if (next >= GROWTH_END) settle()
+    else {
+      elapsed = next
+      setElapsed(next)
+    }
+  }
+  /** One timer at a time. A finished tree ticks at the ambient rate. */
+  const arm = () => {
+    const delay = settled ? AMBIENT_TICK_MS : GROWTH_TICK_MS
+    stop()
+    origin = now()
+    elapsedOrigin = elapsed
+    ambientOrigin = ambient
+    timer = schedule(tick, delay)
   }
   const settle = () => {
     if (settled) return
@@ -61,9 +95,8 @@ export function createGrowth(options: {
     elapsed = GROWTH_END
     setElapsed(GROWTH_END)
     setDone(true)
-    // The hero is a still from here on: Home must cost no frames (and no timer)
-    // once the tree has finished growing.
-    stop()
+    // The growth is over; from here the same clock drives the slower sparkle.
+    if (timer !== undefined) arm()
   }
   // `animations: false` has no clock at all: one static final frame.
   const still = () => {
@@ -74,30 +107,11 @@ export function createGrowth(options: {
   }
   const run = () => {
     if (timer !== undefined) return
-    // A finished tree never animates again; `resume` on a later visit is a no-op.
-    if (settled) return
     if (!options.animations()) {
       still()
       return
     }
-    const origin = now()
-    const elapsedOrigin = elapsed
-    const ambientOrigin = ambient
-    timer = schedule(() => {
-      const dt = (now() - origin) / 1000
-      ambient = ambientOrigin + dt
-      setAmbient(ambient)
-      if (elapsed >= GROWTH_END) {
-        stop()
-        return
-      }
-      const next = elapsedOrigin + dt
-      if (next >= GROWTH_END) settle()
-      else {
-        elapsed = next
-        setElapsed(next)
-      }
-    }, GROWTH_TICK_MS)
+    arm()
   }
 
   return {

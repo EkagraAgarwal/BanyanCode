@@ -6,7 +6,14 @@ import { render } from "@opentui/solid"
 import type { Context } from "@opencode/plugin/tui/context"
 import { Show, createSignal } from "solid-js"
 import { BanyanHero, heroRows } from "../src/components/home/hero"
-import { GROWTH_END, GROWTH_TICK_MS, createGrowth, type Growth } from "../src/components/home/growth"
+import {
+  AMBIENT_TICK_MS,
+  GROWTH_END,
+  GROWTH_TICK_MS,
+  createGrowth,
+  type Growth,
+} from "../src/components/home/growth"
+import { TREE_ROWS_SHORT } from "../src/components/home/banyan-tree"
 import { FINAL_TREE_23, FINAL_TREE_27, WORDMARK_ROWS_AT_6 } from "./fixture/home-keyframes"
 import { context, theme } from "./harness"
 
@@ -93,13 +100,23 @@ async function mountHero(options: {
 const rowsOf = (setup: TestRendererSetup) =>
   setup.captureCharFrame().split("\n").map((row) => row.padEnd(setup.renderer.width, " "))
 
-const cellsOf = (setup: TestRendererSetup) =>
+/** Every cell of the frame, line by line, as text plus colour. */
+const lineCells = (setup: TestRendererSetup) =>
   setup
     .captureSpans()
     .lines.map((line) =>
       line.spans.map((span) => `${span.text}|${span.fg.toString()}|${span.bg.toString()}|${span.attributes}`).join(","),
     )
+
+const cellsOf = (setup: TestRendererSetup) => lineCells(setup).join("\n")
+
+/** The rows a finished full hero keeps perfectly still: everything but the canopy. */
+const stillLines = (setup: TestRendererSetup) =>
+  lineCells(setup)
+    .filter((_, row) => row === 0 || row > TREE_ROWS_SHORT)
     .join("\n")
+
+const cellsUpdated = (setup: TestRendererSetup) => setup.getNativeStats().cellsUpdated
 
 const finished = () => createGrowth({ animations: () => false })
 
@@ -281,7 +298,7 @@ describe("BanyanHero layout", () => {
 })
 
 describe("BanyanHero loop", () => {
-  test("a keypress skips growth, stops the loop, and is not eaten", async () => {
+  test("a keypress skips growth but the sparkle keeps going, and the input is not eaten", async () => {
     const clock = manualGrowth()
     const { setup } = await mountHero({ width: 168, height: 48, growth: clock.growth, headerRows: 1, centered: true })
     try {
@@ -299,11 +316,13 @@ describe("BanyanHero loop", () => {
       expect(clock.growth.elapsed()).toBe(GROWTH_END)
       expect(seen).toHaveLength(1)
       expect(seen[0]!.defaultPrevented).toBe(false)
-      expect(clock.pending).toBe(false)
+      expect(clock.pending).toBe(true)
+      const structure = rowsOf(setup).join("\n")
       const before = cellsOf(setup)
-      clock.advance(500)
+      clock.advance(AMBIENT_TICK_MS)
       await setup.renderOnce()
-      expect(cellsOf(setup)).toBe(before)
+      expect(rowsOf(setup).join("\n")).toBe(structure)
+      expect(cellsOf(setup)).not.toBe(before)
     } finally {
       await setup.dispose()
     }
@@ -320,30 +339,63 @@ describe("BanyanHero loop", () => {
       await setup.renderOnce()
       expect(clock.growth.done()).toBe(true)
       expect(clock.growth.elapsed()).toBe(GROWTH_END)
-      expect(clock.pending).toBe(false)
+      expect(clock.pending).toBe(true)
     } finally {
       await setup.dispose()
     }
   })
 
-  test("the finished hero renders no new frames", async () => {
+  test("the finished tree keeps sparkling while its structure, rule and wordmark stay put", async () => {
     const clock = manualGrowth()
     const { setup } = await mountHero({ width: 120, height: 40, growth: clock.growth, headerRows: 1 })
     try {
       clock.advance(7000)
       await setup.renderOnce()
-      const finished = cellsOf(setup)
-      // No timer, so the clock cannot move, and the frame stays identical.
-      expect(clock.pending).toBe(false)
-      clock.advance(500)
-      await setup.renderOnce()
-      expect(cellsOf(setup)).toBe(finished)
+      expect(clock.growth.done()).toBe(true)
+      // The clock is still running after growth: that is the ambient sparkle.
+      expect(clock.pending).toBe(true)
+      const structure = rowsOf(setup).join("\n")
+      const still = stillLines(setup)
+      let previous = cellsOf(setup)
+      for (let frame = 0; frame < 6; frame += 1) {
+        clock.advance(AMBIENT_TICK_MS)
+        await setup.renderOnce()
+        // Chars never move: the tree, the ground rule and the wordmark are a still.
+        expect(rowsOf(setup).join("\n")).toBe(structure)
+        // Colours outside the canopy never move either.
+        expect(stillLines(setup)).toBe(still)
+        // Inside the canopy the dots that twinkle do.
+        const current = cellsOf(setup)
+        expect(current).not.toBe(previous)
+        previous = current
+      }
+      expect(clock.growth.elapsed()).toBe(GROWTH_END)
     } finally {
       await setup.dispose()
     }
   })
 
-  test("keeps shimmering the wordmark while the compact tier is still growing", async () => {
+  test("an ambient frame repaints only the dots that twinkle", async () => {
+    const clock = manualGrowth()
+    const { setup } = await mountHero({ width: 120, height: 40, growth: clock.growth, headerRows: 1 })
+    try {
+      clock.advance(7000)
+      await setup.renderOnce()
+      const seen: number[] = []
+      for (let frame = 0; frame < 20; frame += 1) {
+        clock.advance(AMBIENT_TICK_MS)
+        await setup.renderOnce()
+        seen.push(cellsUpdated(setup))
+      }
+      // The sparkle changes dots; a redraw of the tree would move hundreds of cells.
+      expect(Math.min(...seen)).toBeGreaterThan(0)
+      expect(Math.max(...seen)).toBeLessThanOrEqual(100)
+    } finally {
+      await setup.dispose()
+    }
+  })
+
+  test("keeps shimmering the wordmark in the compact tier, growing and finished", async () => {
     const clock = manualGrowth()
     const { setup } = await mountHero({ width: 80, height: 20, growth: clock.growth })
     try {
@@ -353,6 +405,16 @@ describe("BanyanHero loop", () => {
       clock.advance(500)
       await setup.renderOnce()
       expect(cellsOf(setup)).not.toBe(before)
+
+      // The wordmark is the compact tier's whole picture, so it keeps sweeping.
+      clock.advance(7000)
+      await setup.renderOnce()
+      expect(clock.growth.done()).toBe(true)
+      expect(clock.pending).toBe(true)
+      const finished = cellsOf(setup)
+      clock.advance(AMBIENT_TICK_MS)
+      await setup.renderOnce()
+      expect(cellsOf(setup)).not.toBe(finished)
     } finally {
       await setup.dispose()
     }
@@ -366,10 +428,64 @@ describe("BanyanHero loop", () => {
     expect(clock.growth.done()).toBe(true)
     expect(clock.growth.ambient()).toBeGreaterThan(0)
     expect(setup.renderer.root.liveCount).toBe(0)
-    expect(clock.pending).toBe(false)
+    expect(clock.pending).toBe(true)
+    const ambient = clock.growth.ambient()
     await setup.dispose()
+    // Unmounting stops the sparkle: the session view costs nothing.
     expect(clock.pending).toBe(false)
     expect(clock.growth.done()).toBe(true)
+    expect(clock.growth.ambient()).toBe(ambient)
+  })
+
+  test("mounting Home again resumes the sparkle where it stopped, without replaying growth", async () => {
+    const clock = manualGrowth()
+    const first = await mountHero({ width: 120, height: 40, growth: clock.growth, headerRows: 1 })
+    clock.advance(7000)
+    await first.setup.renderOnce()
+    expect(clock.pending).toBe(true)
+    await first.setup.dispose()
+    expect(clock.pending).toBe(false)
+    const resumedAt = clock.growth.ambient()
+
+    const second = await mountHero({ width: 120, height: 40, growth: clock.growth, headerRows: 1 })
+    try {
+      expect(clock.pending).toBe(true)
+      expect(clock.growth.elapsed()).toBe(GROWTH_END)
+      expect(clock.growth.ambient()).toBe(resumedAt)
+      const before = cellsOf(second.setup)
+      clock.advance(AMBIENT_TICK_MS)
+      await second.setup.renderOnce()
+      expect(cellsOf(second.setup)).not.toBe(before)
+      expect(clock.growth.ambient()).toBeGreaterThan(resumedAt)
+    } finally {
+      await second.setup.dispose()
+    }
+  })
+
+  test("stops the sparkle while the terminal is unfocused and picks it up on focus", async () => {
+    const clock = manualGrowth()
+    const { setup } = await mountHero({ width: 120, height: 40, growth: clock.growth, headerRows: 1 })
+    try {
+      clock.advance(7000)
+      await setup.renderOnce()
+      expect(clock.pending).toBe(true)
+
+      setup.renderer.emit("blur" as never)
+      await setup.renderOnce()
+      expect(clock.pending).toBe(false)
+      const paused = clock.growth.ambient()
+      clock.advance(5000)
+      await setup.renderOnce()
+      expect(clock.growth.ambient()).toBe(paused)
+
+      setup.renderer.emit("focus" as never)
+      await setup.renderOnce()
+      expect(clock.pending).toBe(true)
+      clock.advance(AMBIENT_TICK_MS)
+      expect(clock.growth.ambient()).toBeGreaterThan(paused)
+    } finally {
+      await setup.dispose()
+    }
   })
 
   test("the plain tier schedules nothing at all", async () => {
@@ -385,13 +501,21 @@ describe("BanyanHero loop", () => {
     }
   })
 
-  test("ticks at no more than 12 fps", async () => {
+  test("grows at 12 fps, then sparkles at 8 to 10 fps", async () => {
     const clock = manualGrowth()
     const { setup } = await mountHero({ width: 120, height: 40, growth: clock.growth })
     try {
       expect(clock.delays).toEqual([GROWTH_TICK_MS])
       expect(GROWTH_TICK_MS).toBeCloseTo(1000 / 12)
-      expect(clock.scheduled).toBe(1)
+      // Never faster than the growth clock, and not so slow it looks choppy.
+      expect(AMBIENT_TICK_MS).toBeGreaterThanOrEqual(100)
+      expect(AMBIENT_TICK_MS).toBeLessThanOrEqual(125)
+
+      clock.advance(7000)
+      await setup.renderOnce()
+      expect(clock.growth.done()).toBe(true)
+      expect(clock.delays).toEqual([GROWTH_TICK_MS, AMBIENT_TICK_MS])
+      expect(clock.scheduled).toBe(2)
     } finally {
       await setup.dispose()
     }
@@ -416,8 +540,12 @@ describe("BanyanHero loop", () => {
       expect(growth.elapsed()).toBe(GROWTH_END)
       expect(growth.ambient()).toBe(GROWTH_END)
       const frame = setup.captureCharFrame()
+      const cells = cellsOf(setup)
+      await setup.renderOnce()
       await setup.renderOnce()
       expect(setup.captureCharFrame()).toBe(frame)
+      expect(cellsOf(setup)).toBe(cells)
+      expect(cellsUpdated(setup)).toBe(0)
     } finally {
       await setup.dispose()
     }

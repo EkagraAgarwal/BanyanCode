@@ -310,12 +310,54 @@ export function treePointCount(height: number) {
   return points(height).length
 }
 
+const sparkleCache = new Map<number, Float32Array>()
+
+/**
+ * Per-cell phase of the leaf that paints that cell last, or -1 where the cell
+ * holds no leaf. This is the same last-point-wins rule `plot` uses, so a cell
+ * sparkles exactly where the full redraw would have painted it `highlight`; the
+ * finished tree then costs one phase test per cell instead of a whole redraw.
+ */
+export function sparklePhases(height: number): Float32Array {
+  const cached = sparkleCache.get(height)
+  if (cached) return cached
+  const phases = new Float32Array(TREE_WIDTH * height).fill(-1)
+  for (const point of points(height)) {
+    if (!point.leaf) continue
+    const x = Math.round(point.x)
+    const y = Math.round(point.y)
+    if (x < 0 || y < 0 || x >= TREE_WIDTH * 2 || y >= height * 4) continue
+    phases[(y >> 2) * TREE_WIDTH + (x >> 1)] = point.ph
+  }
+  sparkleCache.set(height, phases)
+  return phases
+}
+
+/** Threshold on the ambient sine that lights a leaf: the mockup's twinkle. */
+const TWINKLE = 0.994
+
+/**
+ * True while this leaf phase sparkles at `ambient` seconds. The only animation
+ * that survives growth, so it is deliberately one cheap sine per cell.
+ */
+export function twinkle(ambient: number, ph: number) {
+  return Math.sin(ambient * 0.9 + ph * 7) > TWINKLE
+}
+
 /**
  * The grid at a growth `elapsed` and loop `ambient` time, in seconds. Gating uses
  * the growth clock so `finish()` shows the whole tree at once; sway, twinkle and
  * the colour drift use the ambient clock, which keeps running afterwards.
+ *
+ * `sparkle: false` freezes the twinkle out, leaving the still tree the ambient
+ * loop sparkles on top of (see `sparklePhases`).
  */
-export function treeFrame(elapsed: number, ambient: number, frame: TreeFrame = createTreeFrame(TREE_ROWS_SHORT)): TreeFrame {
+export function treeFrame(
+  elapsed: number,
+  ambient: number,
+  frame: TreeFrame = createTreeFrame(TREE_ROWS_SHORT),
+  sparkle = true,
+): TreeFrame {
   const grow = clamp(elapsed / 5.2)
   // Sway and the loop-only effects fade in over the tail of the growth so the handoff is seamless.
   const blend = fadeIn(elapsed, 5.2, 1.2)
@@ -331,9 +373,9 @@ export function treeFrame(elapsed: number, ambient: number, frame: TreeFrame = c
         ambient * CYCLE_SPEED + point.ph * 0.7 + (point.x - cx) * 0.02 - (point.y - cy) * 0.03,
       )
       const band = point.band + wave * 0.16
-      const twinkle = blend > 0.4 && Math.sin(ambient * 0.9 + point.ph * 7) > 0.994
+      const flash = sparkle && blend > 0.4 && twinkle(ambient, point.ph)
       const role =
-        twinkle || grow - point.a < 0.05
+        flash || grow - point.a < 0.05
           ? ROLE.highlight
           : band < 0.34
             ? ROLE.moss

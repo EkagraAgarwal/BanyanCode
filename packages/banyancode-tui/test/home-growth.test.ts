@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { GROWTH_END, GROWTH_TICK_MS, createGrowth, fadeIn } from "../src/components/home/growth"
+import {
+  AMBIENT_TICK_MS,
+  GROWTH_END,
+  GROWTH_TICK_MS,
+  createGrowth,
+  fadeIn,
+} from "../src/components/home/growth"
 
 type Handle = ReturnType<typeof setInterval>
 
@@ -53,6 +59,7 @@ describe("createGrowth", () => {
     expect(clock.scheduled).toBe(1)
     expect(clock.delays).toEqual([GROWTH_TICK_MS])
     expect(GROWTH_TICK_MS).toBeCloseTo(1000 / 12)
+    expect(AMBIENT_TICK_MS).toBeGreaterThanOrEqual(GROWTH_TICK_MS)
   })
 
   test("reads the injected clock instead of the wall clock", () => {
@@ -79,7 +86,7 @@ describe("createGrowth", () => {
     expect(growth.done()).toBe(true)
   })
 
-  test("stops the clock once the tree has finished growing", () => {
+  test("keeps the ambient loop running past the end of growth", () => {
     const clock = manual()
     const growth = createGrowth({ animations: () => true, ...clock })
     growth.start()
@@ -88,15 +95,33 @@ describe("createGrowth", () => {
     clock.advance(1000)
     expect(growth.elapsed()).toBe(GROWTH_END)
     expect(growth.done()).toBe(true)
-    // Home renders no frames after the growth lands: the timer is gone.
-    expect(clock.pending).toBe(false)
+    // The tree has landed but Home still sparkles: the clock keeps one timer,
+    // now at the slower ambient rate.
+    expect(clock.pending).toBe(true)
+    expect(clock.delays).toEqual([GROWTH_TICK_MS, AMBIENT_TICK_MS])
+    expect(clock.scheduled).toBe(2)
     expect(clock.cleared).toBe(1)
-    const frozen = growth.ambient()
-    // Nothing is scheduled any more, so nothing moves.
-    expect(growth.ambient()).toBeCloseTo(frozen)
+    const ambient = growth.ambient()
+    clock.advance(500)
+    expect(growth.elapsed()).toBe(GROWTH_END)
+    expect(growth.ambient()).toBeCloseTo(ambient + 0.5)
   })
 
-  test("finish skips growth and stops the loop", () => {
+  test("sparkles indefinitely without replaying growth", () => {
+    const clock = manual()
+    const growth = createGrowth({ animations: () => true, ...clock })
+    growth.start()
+    clock.advance(6000)
+    clock.advance(1000)
+    const start = growth.ambient()
+    for (let i = 0; i < 60; i += 1) clock.advance(500)
+    expect(growth.ambient()).toBeCloseTo(start + 30)
+    expect(growth.elapsed()).toBe(GROWTH_END)
+    expect(growth.done()).toBe(true)
+    expect(clock.pending).toBe(true)
+  })
+
+  test("finish skips growth but leaves the loop running", () => {
     const clock = manual()
     const growth = createGrowth({ animations: () => true, ...clock })
     growth.start()
@@ -105,10 +130,12 @@ describe("createGrowth", () => {
     growth.finish()
     expect(growth.elapsed()).toBe(GROWTH_END)
     expect(growth.done()).toBe(true)
-    expect(clock.pending).toBe(false)
-    expect(clock.cleared).toBe(1)
+    expect(clock.pending).toBe(true)
+    expect(clock.delays).toEqual([GROWTH_TICK_MS, AMBIENT_TICK_MS])
+    const ambient = growth.ambient()
     clock.advance(500)
     expect(growth.elapsed()).toBe(GROWTH_END)
+    expect(growth.ambient()).toBeCloseTo(ambient + 0.5)
   })
 
   test("pause drops the timer and freezes both clocks", () => {
@@ -125,7 +152,26 @@ describe("createGrowth", () => {
     expect(clock.cleared).toBe(1)
   })
 
-  test("resume continues growth but never restarts a finished tree", () => {
+  test("resume continues the loop without replaying growth", () => {
+    const clock = manual()
+    const growth = createGrowth({ animations: () => true, ...clock })
+    growth.start()
+    clock.advance(6000)
+    clock.advance(1000)
+    expect(growth.done()).toBe(true)
+    growth.pause()
+    clock.advance(60_000)
+    const ambient = growth.ambient()
+    growth.resume()
+    expect(clock.pending).toBe(true)
+    expect(clock.delays[clock.delays.length - 1]).toBe(AMBIENT_TICK_MS)
+    clock.advance(250)
+    expect(growth.elapsed()).toBe(GROWTH_END)
+    expect(growth.done()).toBe(true)
+    expect(growth.ambient()).toBeCloseTo(ambient + 0.25)
+  })
+
+  test("resume mid-growth continues from where it paused", () => {
     const clock = manual()
     const growth = createGrowth({ animations: () => true, ...clock })
     growth.start()
@@ -134,13 +180,7 @@ describe("createGrowth", () => {
     growth.resume()
     clock.advance(250)
     expect(growth.elapsed()).toBeCloseTo(1.25)
-
-    clock.advance(6000)
-    expect(growth.done()).toBe(true)
-    expect(clock.pending).toBe(false)
-    growth.resume()
-    expect(clock.pending).toBe(false)
-    expect(clock.scheduled).toBe(2)
+    expect(clock.delays).toEqual([GROWTH_TICK_MS, GROWTH_TICK_MS])
   })
 
   test("start after finish does not replay", () => {
@@ -149,7 +189,7 @@ describe("createGrowth", () => {
     growth.start()
     growth.finish()
     growth.start()
-    expect(clock.scheduled).toBe(1)
+    expect(clock.scheduled).toBe(2)
     expect(growth.elapsed()).toBe(GROWTH_END)
   })
 

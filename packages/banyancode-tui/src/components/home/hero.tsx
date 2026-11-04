@@ -3,6 +3,7 @@ import {
   RGBA,
   Renderable,
   TextAttributes,
+  type BufferAccess,
   type OptimizedBuffer,
   type RenderableOptions,
   type RenderContext,
@@ -13,7 +14,9 @@ import {
   TREE_ROLES,
   TREE_WIDTH,
   createTreeFrame,
+  sparklePhases,
   treeFrame,
+  twinkle,
   type TreeFrame,
   type TreeRole,
 } from "./banyan-tree"
@@ -163,10 +166,28 @@ type Options = RenderableOptions<BanyanHomeArtRenderable> & {
 }
 
 /**
+ * The reusable scratch the ambient sparkle needs, sized once per tree height.
+ * `lit` is the previous frame's sparkles and `next` the current one; the two
+ * swap so a frame allocates nothing.
+ */
+type Sparkle = {
+  readonly phases: Float32Array
+  lit: Int32Array
+  next: Int32Array
+  readonly stamp: Uint32Array
+  count: number
+  generation: number
+}
+
+/**
  * Draws the Home tree and wordmark into its own frame buffer (`buffered`) through
  * `withBuffers`, so a frame is plain typed-array writes plus one blit. It is never
  * `live`: the growth clock requests a render per tick, and an unchanged frame is
  * reused, so a paused tree costs nothing.
+ *
+ * Once the tree is finished the frame buffer keeps the still picture and the
+ * ambient ticks only repaint the cells whose leaf sparkles: no per-frame tree
+ * rebuild, no cell walk, and no terminal bytes for cells that did not change.
  */
 export class BanyanHomeArtRenderable extends Renderable {
   private _mode: HomeArtMode = "full"
@@ -176,6 +197,9 @@ export class BanyanHomeArtRenderable extends Renderable {
   private _tree: TreeFrame | undefined
   private readonly wordmark: WordmarkFrame = createWordmarkFrame()
   private drawnKey = ""
+  /** True once the frame buffer holds the finished tree for the current size and palette. */
+  private baseDrawn = false
+  private _sparkle: Sparkle | undefined
 
   constructor(ctx: RenderContext, options: Options = {}) {
     super(ctx, { ...options, buffered: true, live: false })
@@ -189,7 +213,7 @@ export class BanyanHomeArtRenderable extends Renderable {
   set mode(value: HomeArtMode) {
     if (value === this._mode) return
     this._mode = value
-    this.invalidate()
+    this.redraw()
   }
 
   get elapsed() {
@@ -199,7 +223,8 @@ export class BanyanHomeArtRenderable extends Renderable {
   set elapsed(value: number) {
     if (value === this._elapsed) return
     this._elapsed = value
-    this.invalidate()
+    this.drawnKey = ""
+    this.requestRender()
   }
 
   get ambient() {
@@ -209,7 +234,8 @@ export class BanyanHomeArtRenderable extends Renderable {
   set ambient(value: number) {
     if (value === this._ambient) return
     this._ambient = value
-    this.invalidate()
+    this.drawnKey = ""
+    this.requestRender()
   }
 
   get palette(): HomeArtPalette | undefined {
@@ -219,15 +245,18 @@ export class BanyanHomeArtRenderable extends Renderable {
   set palette(value: HomeArtPalette) {
     if (value.signature === this._palette?.signature) return
     this._palette = value
-    this.invalidate()
+    this.redraw()
   }
 
-  private invalidate() {
+  /** The frame buffer is stale: repaint everything, including the finished tree. */
+  private redraw() {
     this.drawnKey = ""
+    this.baseDrawn = false
     this.requestRender()
   }
 
   protected override handleFrameBufferResize(width: number, height: number) {
+    this.baseDrawn = false
     this.drawnKey = ""
     super.handleFrameBufferResize(width, height)
   }
@@ -235,14 +264,76 @@ export class BanyanHomeArtRenderable extends Renderable {
   protected override destroySelf() {
     this._palette = undefined
     this._tree = undefined
+    this._sparkle = undefined
+    this.baseDrawn = false
     this.drawnKey = ""
     super.destroySelf()
   }
 
   private frame(): TreeFrame {
     const height = Math.max(1, this.height - BELOW_TREE)
-    if (!this._tree || this._tree.height !== height) this._tree = createTreeFrame(height)
+    if (!this._tree || this._tree.height !== height) {
+      this._tree = createTreeFrame(height)
+      this._sparkle = undefined
+    }
     return this._tree
+  }
+
+  private sparkle(height: number): Sparkle {
+    const prepared = this._sparkle
+    if (prepared && prepared.phases.length === TREE_WIDTH * height) return prepared
+    const size = TREE_WIDTH * height
+    const sparkle: Sparkle = {
+      phases: sparklePhases(height),
+      lit: new Int32Array(size),
+      next: new Int32Array(size),
+      stamp: new Uint32Array(size),
+      count: 0,
+      generation: 0,
+    }
+    this._sparkle = sparkle
+    return sparkle
+  }
+
+  /**
+   * Repaints only the sparkles: cells that start twinkling go to `highlight`,
+   * the ones that stop go back to the colour their tree role holds. The chars,
+   * the trunk, the roots, the rule and the wordmark are already in the buffer.
+   */
+  private paintSparkles(cells: BufferAccess, palette: HomeArtPalette, ambient: number) {
+    const tree = this._tree!
+    const sparkle = this.sparkle(tree.height)
+    const { phases, stamp } = sparkle
+    const generation = ++sparkle.generation
+    const stride = cells.width
+    const rows = Math.min(this.height, cells.height)
+    const cols = Math.min(this.width, stride)
+    const fg = cells.fg
+    const next = sparkle.next
+    let count = 0
+    for (let cell = 0; cell < phases.length; cell++) {
+      if (!tree.mask[cell]) continue
+      const ph = phases[cell]!
+      if (ph < 0 || !twinkle(ambient, ph)) continue
+      const x = cell % TREE_WIDTH
+      const y = (cell - x) / TREE_WIDTH
+      if (x >= cols || y >= rows) continue
+      stamp[cell] = generation
+      next[count++] = cell
+      copy(fg, (y * stride + x) * 4, palette.highlight)
+    }
+    const lit = sparkle.lit
+    for (let i = 0; i < sparkle.count; i++) {
+      const cell = lit[i]!
+      if (stamp[cell] === generation) continue
+      const x = cell % TREE_WIDTH
+      const y = (cell - x) / TREE_WIDTH
+      if (x >= cols || y >= rows) continue
+      copy(fg, (y * stride + x) * 4, palette.tree[tree.roles[cell]!]!)
+    }
+    sparkle.lit = next
+    sparkle.next = lit
+    sparkle.count = count
   }
 
   protected override renderSelf(buffer: OptimizedBuffer) {
@@ -255,10 +346,21 @@ export class BanyanHomeArtRenderable extends Renderable {
     const height = this.height
     if (width <= 0 || height <= 0) return
     const t = this._elapsed
-    const key = `${this._mode}|${t}|${this._ambient}|${width}x${height}|${palette.signature}`
+    const ambient = this._ambient
+    // The finished full tree is a still picture; from here only its sparkles move.
+    const still = t >= GROWTH_END && this._mode === "full"
+    const key = `${this._mode}|${t}|${still ? "still" : "grow"}|${ambient}|${width}x${height}|${palette.signature}`
     if (key === this.drawnKey) return
-    const tree = this._mode === "full" ? treeFrame(t, this._ambient, this.frame()) : undefined
-    wordmarkFrame(this._mode === "wordmark" ? GROWTH_END : t, this._ambient, palette, this.wordmark)
+    if (still && this.baseDrawn) {
+      buffer.withBuffers((cells) => this.paintSparkles(cells, palette, ambient))
+      this.drawnKey = key
+      return
+    }
+    // A still frame carries no baked-in twinkle, so every sparkle can be undone.
+    const tree = this._mode === "full" ? treeFrame(t, ambient, this.frame(), !still) : undefined
+    // The wordmark's sweep belongs to the growth and to the compact tier; the
+    // finished full tree keeps the frame it already drew.
+    wordmarkFrame(this._mode === "wordmark" ? GROWTH_END : t, ambient, palette, this.wordmark)
     const ruleRow = height - BELOW_TREE
     buffer.withBuffers((cells) => {
       const stride = cells.width
@@ -298,6 +400,12 @@ export class BanyanHomeArtRenderable extends Renderable {
         put(left + cell.x, top + cell.row, cell.char, this.wordmark.colors[index]!)
       })
     })
+    if (still) {
+      // The first still frame is the frozen tree plus the sparkles it carries now.
+      this.sparkle(this.frame().height).count = 0
+      buffer.withBuffers((cells) => this.paintSparkles(cells, palette, ambient))
+      this.baseDrawn = true
+    }
     this.drawnKey = key
   }
 }
@@ -313,9 +421,14 @@ extend({ banyan_home_art: BanyanHomeArtRenderable })
 type Tier = "full" | "compact" | "plain" | "none"
 
 /**
- * The Home hero: grows a banyan once, then holds the finished still. The layout
- * size never changes while growing, so the prompt mounted below it stays put.
- * Nothing animates after the growth clock lands (no timer, no frames).
+ * The Home hero: grows a banyan once, then sparkles its leaves for as long as
+ * Home is visible. The layout size never changes while growing, so the prompt
+ * mounted below it stays put.
+ *
+ * After growth the picture is a cached still frame and the ambient clock only
+ * repaints the dots that twinkle, nine times a second. A paused, unfocused or
+ * unmounted hero holds no timer at all, so Home, the session view and every
+ * other tab idle as cheaply as they did before.
  *
  * `height` is Home's real height in rows when the host passes it: chrome like the
  * session tab strip and the devtools bar is not the hero's to spend.
@@ -336,6 +449,9 @@ export function BanyanHero(props: {
     if (size === HERO_PLAIN_ROWS) return "plain"
     return "none"
   })
+  // Nothing is painted while the terminal reports it has no focus, so the
+  // sparkle stops spending frames on a Home nobody is looking at.
+  const [focused, setFocused] = createSignal(true)
   const [art, setArt] = createSignal<BanyanHomeArtRenderable>()
   const bindArt = (node: BanyanHomeArtRenderable) => {
     setArt(node)
@@ -345,13 +461,26 @@ export function BanyanHero(props: {
   onMount(() => {
     const keyInput = props.context.renderer.keyInput
     if (keyInput) {
-      // Skips growth only; the ambient loop keeps going and the input is never consumed.
+      // Skips growth only; the ambient loop keeps running and the input is never consumed.
       const finish = () => props.growth.finish()
       keyInput.on("keypress", finish)
       keyInput.on("paste", finish)
       onCleanup(() => {
         keyInput.off("keypress", finish)
         keyInput.off("paste", finish)
+      })
+    }
+    // Terminal focus reporting, when the host hands us the renderer: the clock
+    // stops while the window is in the background and picks up where it left off.
+    const renderer = props.context.renderer
+    if (typeof renderer.on === "function") {
+      const blur = () => setFocused(false)
+      const focus = () => setFocused(true)
+      renderer.on("blur", blur)
+      renderer.on("focus", focus)
+      onCleanup(() => {
+        renderer.off("blur", blur)
+        renderer.off("focus", focus)
       })
     }
     // Leaving Home pauses the loop: returning shows the finished tree and resumes it.
@@ -363,9 +492,10 @@ export function BanyanHero(props: {
     if (tier() === "full" || tier() === "compact") props.growth.resume()
   })
 
-  // The plain tier draws no animated art, so it does not keep the clock running.
+  // The plain tier draws no animated art, and a background window draws nothing,
+  // so neither keeps the clock running.
   createEffect(() => {
-    if (tier() === "full" || tier() === "compact") props.growth.resume()
+    if (focused() && (tier() === "full" || tier() === "compact")) props.growth.resume()
     else props.growth.pause()
   })
 
