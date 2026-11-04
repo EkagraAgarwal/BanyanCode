@@ -9,7 +9,7 @@ export const CANOPY_SECOND_OFFSET = 0.55
 export const CANOPY_SECOND_SIGMA = 5
 export const CANOPY_SECOND_WEIGHT = 0.55
 /** Colour steps the run list quantises to, so neighbouring cells merge. */
-const CANOPY_LEVELS = 12
+const CANOPY_LEVELS = 8
 
 const BASE = "─"
 const ACTIVE = "━"
@@ -69,4 +69,19 @@ export function canopyRuns(input: {
 
 function quantise(level: number) {
   return Math.round(level * CANOPY_LEVELS) / CANOPY_LEVELS
+}
+
+/**
+ * Whether two run lists draw the same row. The sweep repaints twelve times a
+ * second while work runs, but most frames land on the same quantised levels;
+ * returning the previous array in that case keeps the renderables (and the
+ * `<For>` above them) untouched.
+ */
+export function sameCanopyRuns(left: readonly CanopyRun[], right: readonly CanopyRun[]): boolean {
+  if (left === right) return true
+  if (left.length !== right.length) return false
+  return left.every((run, index) => {
+    const other = right[index]!
+    return run.active === other.active && run.level === other.level && run.text === other.text
+  })
 }

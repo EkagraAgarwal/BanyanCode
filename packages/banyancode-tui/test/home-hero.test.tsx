@@ -281,7 +281,7 @@ describe("BanyanHero layout", () => {
 })
 
 describe("BanyanHero loop", () => {
-  test("a keypress skips growth but the loop keeps going, and the input is not eaten", async () => {
+  test("a keypress skips growth, stops the loop, and is not eaten", async () => {
     const clock = manualGrowth()
     const { setup } = await mountHero({ width: 168, height: 48, growth: clock.growth, headerRows: 1, centered: true })
     try {
@@ -299,11 +299,11 @@ describe("BanyanHero loop", () => {
       expect(clock.growth.elapsed()).toBe(GROWTH_END)
       expect(seen).toHaveLength(1)
       expect(seen[0]!.defaultPrevented).toBe(false)
-      expect(clock.pending).toBe(true)
+      expect(clock.pending).toBe(false)
       const before = cellsOf(setup)
       clock.advance(500)
       await setup.renderOnce()
-      expect(cellsOf(setup)).not.toBe(before)
+      expect(cellsOf(setup)).toBe(before)
     } finally {
       await setup.dispose()
     }
@@ -320,35 +320,34 @@ describe("BanyanHero loop", () => {
       await setup.renderOnce()
       expect(clock.growth.done()).toBe(true)
       expect(clock.growth.elapsed()).toBe(GROWTH_END)
-      expect(clock.pending).toBe(true)
+      expect(clock.pending).toBe(false)
     } finally {
       await setup.dispose()
     }
   })
 
-  test("leaves move between two ambient times while the trunk stays put", async () => {
+  test("the finished hero renders no new frames", async () => {
     const clock = manualGrowth()
     const { setup } = await mountHero({ width: 120, height: 40, growth: clock.growth, headerRows: 1 })
     try {
       clock.advance(7000)
       await setup.renderOnce()
-      const before = rowsOf(setup)
+      const finished = cellsOf(setup)
+      // No timer, so the clock cannot move, and the frame stays identical.
+      expect(clock.pending).toBe(false)
       clock.advance(500)
       await setup.renderOnce()
-      const after = rowsOf(setup)
-      // Rows 1..12 are canopy only; rows 18..23 hold the trunk and nothing else.
-      expect(before.slice(1, 13).join("\n")).not.toBe(after.slice(1, 13).join("\n"))
-      expect(before.slice(18, 24).join("\n")).toBe(after.slice(18, 24).join("\n"))
+      expect(cellsOf(setup)).toBe(finished)
     } finally {
       await setup.dispose()
     }
   })
 
-  test("keeps shimmering the wordmark in the compact tier", async () => {
+  test("keeps shimmering the wordmark while the compact tier is still growing", async () => {
     const clock = manualGrowth()
     const { setup } = await mountHero({ width: 80, height: 20, growth: clock.growth })
     try {
-      clock.advance(7000)
+      clock.advance(1000)
       await setup.renderOnce()
       const before = cellsOf(setup)
       clock.advance(500)
@@ -365,9 +364,9 @@ describe("BanyanHero loop", () => {
     clock.advance(7000)
     await setup.renderOnce()
     expect(clock.growth.done()).toBe(true)
-    expect(clock.growth.ambient()).toBeGreaterThan(GROWTH_END)
+    expect(clock.growth.ambient()).toBeGreaterThan(0)
     expect(setup.renderer.root.liveCount).toBe(0)
-    expect(clock.pending).toBe(true)
+    expect(clock.pending).toBe(false)
     await setup.dispose()
     expect(clock.pending).toBe(false)
     expect(clock.growth.done()).toBe(true)

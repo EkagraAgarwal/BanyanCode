@@ -9,7 +9,7 @@ import { categorizeTokens } from "../../data/tokens"
 import { createTicker, mix, useTickerWhen, type Ticker } from "../../motion"
 import { palette } from "../../theme"
 import { selectView, tabColumns, tabsEnd, viewKeyForPanel, SessionTabs, VIEW_TABS, type TabColumn, type ViewKey } from "../panels/nav"
-import { canopyRuns } from "./canopy"
+import { canopyRuns, sameCanopyRuns, type CanopyRun } from "./canopy"
 import { attentionBreakdown } from "./attention"
 import { activeAgentCount, activePeers, graphPill, severityColor, type PillSeverity } from "./pills"
 
@@ -447,15 +447,22 @@ function TrunkHeader(props: ChromeHeaderProps) {
     layout().tabs.find((column) => column.key === activeKey())
   )
   const time = useTickerWhen(ticker, () => busy())
-  const runs = createMemo(() =>
-    canopyRuns({
+  // Keep the previous run list when a frame quantises to exactly the same row:
+  // the memo is the only thing that writes to the `<For>`, so an identical row
+  // costs no renderable churn. `busy` false short-circuits to one unlit run.
+  let drawnRuns: CanopyRun[] = []
+  const runs = createMemo(() => {
+    const next = canopyRuns({
       width: dimensions().width,
       tick: time(),
       busy: busy(),
       activeStart: activeColumn()?.segmentStart,
       activeWidth: activeColumn()?.width,
-    }),
-  )
+    })
+    if (sameCanopyRuns(drawnRuns, next)) return drawnRuns
+    drawnRuns = next
+    return next
+  })
   const runColor = (run: { readonly level: number; readonly active: boolean }): RGBA =>
     run.active ? theme().leaf : mix(theme().border, theme().highlight, run.level)
 

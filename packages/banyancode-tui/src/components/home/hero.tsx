@@ -313,8 +313,9 @@ extend({ banyan_home_art: BanyanHomeArtRenderable })
 type Tier = "full" | "compact" | "plain" | "none"
 
 /**
- * The Home hero: grows a banyan once, then loops its ambient effects until unmounted.
- * The layout size never changes while growing, so the prompt mounted below it stays put.
+ * The Home hero: grows a banyan once, then holds the finished still. The layout
+ * size never changes while growing, so the prompt mounted below it stays put.
+ * Nothing animates after the growth clock lands (no timer, no frames).
  *
  * `height` is Home's real height in rows when the host passes it: chrome like the
  * session tab strip and the devtools bar is not the hero's to spend.

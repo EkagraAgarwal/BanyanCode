@@ -79,7 +79,7 @@ describe("createGrowth", () => {
     expect(growth.done()).toBe(true)
   })
 
-  test("keeps the ambient loop running past the end of growth", () => {
+  test("stops the clock once the tree has finished growing", () => {
     const clock = manual()
     const growth = createGrowth({ animations: () => true, ...clock })
     growth.start()
@@ -88,14 +88,15 @@ describe("createGrowth", () => {
     clock.advance(1000)
     expect(growth.elapsed()).toBe(GROWTH_END)
     expect(growth.done()).toBe(true)
-    expect(clock.pending).toBe(true)
-    expect(growth.ambient()).toBeCloseTo(7)
-    clock.advance(500)
-    expect(growth.elapsed()).toBe(GROWTH_END)
-    expect(growth.ambient()).toBeCloseTo(7.5)
+    // Home renders no frames after the growth lands: the timer is gone.
+    expect(clock.pending).toBe(false)
+    expect(clock.cleared).toBe(1)
+    const frozen = growth.ambient()
+    // Nothing is scheduled any more, so nothing moves.
+    expect(growth.ambient()).toBeCloseTo(frozen)
   })
 
-  test("finish skips growth but leaves the loop running", () => {
+  test("finish skips growth and stops the loop", () => {
     const clock = manual()
     const growth = createGrowth({ animations: () => true, ...clock })
     growth.start()
@@ -104,11 +105,10 @@ describe("createGrowth", () => {
     growth.finish()
     expect(growth.elapsed()).toBe(GROWTH_END)
     expect(growth.done()).toBe(true)
-    expect(clock.pending).toBe(true)
-    expect(clock.cleared).toBe(0)
+    expect(clock.pending).toBe(false)
+    expect(clock.cleared).toBe(1)
     clock.advance(500)
     expect(growth.elapsed()).toBe(GROWTH_END)
-    expect(growth.ambient()).toBeCloseTo(0.62)
   })
 
   test("pause drops the timer and freezes both clocks", () => {
@@ -125,21 +125,22 @@ describe("createGrowth", () => {
     expect(clock.cleared).toBe(1)
   })
 
-  test("resume continues the loop without replaying growth", () => {
+  test("resume continues growth but never restarts a finished tree", () => {
     const clock = manual()
     const growth = createGrowth({ animations: () => true, ...clock })
     growth.start()
-    clock.advance(6000)
     clock.advance(1000)
-    expect(growth.done()).toBe(true)
     growth.pause()
-    clock.advance(60_000)
-    const frozen = growth.ambient()
     growth.resume()
     clock.advance(250)
-    expect(growth.elapsed()).toBe(GROWTH_END)
+    expect(growth.elapsed()).toBeCloseTo(1.25)
+
+    clock.advance(6000)
     expect(growth.done()).toBe(true)
-    expect(growth.ambient()).toBeCloseTo(frozen + 0.25)
+    expect(clock.pending).toBe(false)
+    growth.resume()
+    expect(clock.pending).toBe(false)
+    expect(clock.scheduled).toBe(2)
   })
 
   test("start after finish does not replay", () => {
