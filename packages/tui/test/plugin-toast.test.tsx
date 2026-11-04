@@ -26,6 +26,13 @@ function setup(route: Route) {
     shortcuts: {},
     keymapState: {},
     sessionTabs: {},
+    composer: {
+      placeholder: () => undefined,
+      setPlaceholder() {},
+      intercept: () => () => {},
+      suggest: () => () => {},
+      route: () => () => {},
+    },
     toast: { show: (toast: Shown) => shown.push(toast) },
     route: {
       get data() {

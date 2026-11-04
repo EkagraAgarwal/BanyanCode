@@ -172,14 +172,19 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/src/component/prompt/autocomplete.tsx` | fix | a command offered by both client and server is listed once; a mounted surface's own `@` rows are listed before the host's file, agent and reference matches | — |
 | `packages/tui/src/routes/home.tsx` | hook | `home.logo` and `home.bottom` slots, size-only gap and centring rules, and a prompt without its own footer row so the full layout fits 120x40 | — |
 | `packages/plugin/src/tui/context.ts` | hook | declares the `home.logo` slot, `ui.animations`, `ui.sessionLayout`, `slash.forwardToServer`, the panel `bleed` option (a panel can take the whole main area), the `ui.composer` seams (submit interceptor, `@` suggestions, route label, placeholder, focus-with-text) and message history paging (`more`, `loading`, `loadMore`) | - |
-| `packages/client/src/solid/data.ts` | fix | bounds loaded message history per session (`MESSAGE_HISTORY_CAP`) and keeps older appended pages across a fresh newest-window refetch, so a replace cannot wipe an append | - |
+| `packages/client/src/solid/data.ts` | fix | bounds loaded message history per session (`MESSAGE_HISTORY_CAP`); keeps older appended pages across a fresh newest-window refetch, except a reconnect resync, which replaces the transcript so a message the server dropped leaves with it | - |
 | `packages/client/test/solid-data.test.ts` | fix | covers the history cap and that an appended older page survives a replacing fetch | - |
 | `packages/tui/src/plugin/api.tsx` | hook | wires `ui.animations` from the host's `config.animations`, `ui.sessionLayout` from `config.session_layout`, passes the panel options through, including `bleed`, and adapts `ui.composer` to the prompt ref and the composer context | — |
 | `packages/tui/src/feature-plugins/home/footer.tsx` | hook | one-row footer: directory and branch status content, the prompt hints the home prompt no longer carries, update notice and version on one line | — |
 | `packages/tui/src/feature-plugins/system/storybook/home.tsx` | hook | fixture-driven home hero story with replay and final-frame controls | — |
 | `packages/tui/src/feature-plugins/system/storybook/index.tsx` | hook | registers the home story | — |
 | `packages/tui/test/feature-plugins/home-redesign.test.tsx` | hook | covers the `home.logo` slot with and without a claim, and the one-row footer | — |
-| `packages/tui/test/fixture/app.ts` | hook | accepts an updater so the footer update notice is reachable in tests | — |
+| `packages/tui/test/fixture/app.ts` | hook | accepts an updater so the footer update notice is reachable in tests; clears the process-global prompt draft stash so one fixture cannot inherit the previous test's text | - |
+| `packages/tui/src/component/prompt/draft-stash.ts` | hook | `resetDrafts()` clears the process-global stash for test isolation | - |
+| `packages/tui/test/plugin-model.test.tsx` | fix | stubs the host `composer` seam the plugin context reads when it is created | - |
+| `packages/tui/test/plugin-toast.test.tsx` | fix | stubs the host `composer` seam the plugin context reads when it is created | - |
+| `packages/server/bunfig.toml` | hook | server tests preload an env that keeps the plugin's background code-graph build from starving timing-sensitive endpoints | - |
+| `packages/server/test/preload.ts` | hook | disables the plugin's background code-graph build (it walks the repository and outlives the fixture's storage scope) | - |
 | `packages/tui/src/component/prompt/index.tsx` | hook | a slash command can hand some inputs to the server command of the same name; a `footer` prop lets Home drop the location/hint row; a `bleed` prop drops that row and the box's leading blank as well, so a full-bleed panel's composer is five rows (three under 28 terminal rows); a registered surface can replace the placeholder, claim a submit, and label the model row with where the text will go | — |
 | `packages/tui/src/context/composer.tsx` | hook | hosts the composer seams a surface registers while it is mounted: submit interceptors, `@` suggestions, route resolvers and a placeholder override | — |
 | `packages/tui/src/app.tsx` | hook | mounts the composer provider above the plugin tree, so `ui.composer` reaches every plugin | — |

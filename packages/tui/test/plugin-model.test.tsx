@@ -11,6 +11,13 @@ function pluginModel(local: ReturnType<typeof usePluginHost>["local"]) {
     shortcuts: {},
     keymapState: {},
     sessionTabs: {},
+    composer: {
+      placeholder: () => undefined,
+      setPlaceholder() {},
+      intercept: () => () => {},
+      suggest: () => () => {},
+      route: () => () => {},
+    },
     local,
   } as unknown as ReturnType<typeof usePluginHost>
   const registry: Registry = { has: () => false, set() {}, remove() {}, active: () => true }

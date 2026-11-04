@@ -3,6 +3,7 @@ import { Effect, FileSystem } from "effect"
 import path from "node:path"
 import { Global } from "@opencode/util/global"
 import type { TuiInput } from "../../src/app"
+import { resetDrafts } from "../../src/component/prompt/draft-stash"
 import type { Config } from "../../src/config"
 import type { UpdateSource } from "../../src/context/update-notification"
 import { tmpdir } from "./fixture"
@@ -21,6 +22,9 @@ export async function createAppFixture(
     setup?: TestRendererSetup
   } = {},
 ) {
+  // Drafts live in a module map, so an earlier app in this process would hand
+  // its Home text to this one on mount. Every fixture starts empty.
+  resetDrafts()
   const { run } = await import("../../src/app")
   const root = await tmpdir()
   const setup =

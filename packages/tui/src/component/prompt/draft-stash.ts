@@ -9,6 +9,15 @@ export type DraftEntry = { prompt: PromptInfo; cursor: number }
 
 const byTab = new Map<string | undefined, DraftEntry>()
 
+/**
+ * Clears every tab's draft. Tests share one process and this module is
+ * process-global, so a fixture must start from an empty stash instead of
+ * inheriting the previous test's text.
+ */
+export function resetDrafts() {
+  byTab.clear()
+}
+
 export function takeDraft(sessionID: string | undefined) {
   const entry = byTab.get(sessionID)
   byTab.delete(sessionID)
