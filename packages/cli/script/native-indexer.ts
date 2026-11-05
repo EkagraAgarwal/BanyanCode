@@ -121,8 +121,11 @@ export const buildNativeIndexer = async (
   if (host) {
     console.log(`[native-indexer] cargo build --release (${triple})`)
     await $`cargo build --release`.cwd(NATIVE_DIR)
-  } else if (commandAvailable("cargo", ["zigbuild", "--version"])) {
+  } else if (item.os === "linux" && commandAvailable("cargo", ["zigbuild", "--help"])) {
+    // zigbuild has no --version flag, so probe with --help. Only Linux targets use it:
+    // macOS cross-builds with the system clang, and zig cannot emit the MSVC ABI.
     console.log(`[native-indexer] cargo zigbuild --release --target ${triple}`)
+    await $`rustup target add ${triple}`
     await $`cargo zigbuild --release --target ${triple}`.cwd(NATIVE_DIR)
   } else {
     // No zigbuild: a native toolchain for the target may still exist (a Windows

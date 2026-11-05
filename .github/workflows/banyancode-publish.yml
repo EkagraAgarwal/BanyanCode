@@ -195,7 +195,7 @@ jobs:
           fi
           cargo --version
           zig version || true
-          cargo zigbuild --version || true
+          cargo zigbuild --help >/dev/null && echo "cargo-zigbuild ok" || true
 
       - name: Restore native indexer build cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
