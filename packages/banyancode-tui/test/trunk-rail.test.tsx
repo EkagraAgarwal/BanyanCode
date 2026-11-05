@@ -5,7 +5,7 @@ import type { Context } from "@opencode/plugin/tui/context"
 import { createTicker } from "../src/motion"
 import { TRUNK_RAIL_MIN_WIDTH, trunkCapacity, trunkRows, type TrunkBranch } from "../src/components/trunk/layout"
 import { TrunkRail, TrunkSurface } from "../src/components/trunk/trunk"
-import { context, meshLive, meshNode, mount, session } from "./harness"
+import { context, meshLive, meshNode, mount, session, usageLive } from "./harness"
 
 const ROOT = "ses_root"
 /** One fixed "now" for every fixture, so ages are exact rather than drifting. */
@@ -165,8 +165,40 @@ test.each([
   }
 })
 
-test("the narrow form drops the rail for a pill row", async () => {
-  expect(100).toBeLessThan(TRUNK_RAIL_MIN_WIDTH)
+test("the rail carries the gateway summary when usage is available", async () => {
+  const data = everyState()
+  const app = await mount(
+    () => (
+      <TrunkRail
+        context={data.context}
+        sessionID={data.sessionID}
+        mesh={data.mesh}
+        width={40}
+        height={20}
+        now={() => NOW}
+        usage={usageLive({
+          tools: [{ toolId: "code_find", useCount: 12, lastUsedAt: 1_000 }],
+          gateway: {
+            rows: [
+              { fromTool: "grep", toTool: "code_find", route: "swapped", useCount: 12, bytesSaved: 0, lastUsedAt: 1_000 },
+            ],
+            summary: { swapped: 12, fallback: 5, augmented: 0, direct: 18, bytesSaved: 184_320 },
+          },
+        })}
+      />
+    ),
+    { width: 40, height: 20 },
+  )
+  try {
+    const frame = app.captureCharFrame()
+    // The rail is narrow: the summary drops to the compact spelling instead of clipping.
+    expect(frame).toContain("12⇢ 5↩ 18 raw ~180 KB")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("the narrow form drops the rail for a pill row", async () => {  expect(100).toBeLessThan(TRUNK_RAIL_MIN_WIDTH)
   const data = everyState()
   const app = await mount(
     () => (

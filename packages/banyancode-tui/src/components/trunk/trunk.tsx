@@ -3,8 +3,9 @@ import type { RGBA } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js"
 import { createDismissedBranches, type DismissedBranches } from "../../data/dismissed"
-import type { MeshLive } from "../../data/live"
+import type { MeshLive, UsageLive } from "../../data/live"
 import { directChildren, type ChildState } from "../../data/mesh"
+import { gatewaySummaryLine } from "../../data/usage"
 import { createTicker, mix, useTickerWhen, type Ticker } from "../../motion"
 import { palette, type Palette } from "../../theme"
 import { openView } from "../panels/nav"
@@ -77,6 +78,12 @@ export function TrunkRail(props: {
   readonly now?: (() => number) | undefined
   /** Shared dismissal set. Omitted, the rail keeps its own for its lifetime. */
   readonly dismissed?: DismissedBranches | undefined
+  /**
+   * Usage for the gateway footer. The classic sidebar owns the full panel; the
+   * rail replaces that sidebar in the Trunk layout, so one summary line keeps
+   * the swap count reachable there.
+   */
+  readonly usage?: UsageLive | undefined
 }) {
   const theme = (): Palette => palette(props.context.theme)
   const animations = () => props.context.ui.animations()
@@ -190,7 +197,23 @@ export function TrunkRail(props: {
     return now()
   }
 
-  const rows = createMemo(() => trunkRows({ height: height(), branches: branches() }))
+  const usageLine = createMemo(() =>
+    gatewaySummaryLine(props.usage?.gateway(props.sessionID)?.summary, Math.max(8, area() - 1)),
+  )
+  const rows = createMemo(() => trunkRows({ height: height() - (usageLine() === undefined ? 0 : 1), branches: branches() }))
+
+  const refreshUsage = () => {
+    if (props.usage === undefined) return
+    void props.usage.refreshGateway(props.sessionID)
+    void props.usage.refreshTools(props.sessionID)
+  }
+  onMount(refreshUsage)
+  onCleanup(
+    props.context.data.on("session.step.ended", (event) => {
+      if (event.data.sessionID === props.sessionID) refreshUsage()
+    }),
+  )
+
   const open = (sessionID: string) => props.context.ui.router.navigate({ type: "session", sessionID })
   const dismiss = (branch: TrunkBranch) => dismissed.dismiss(rootSessionID(), [branch.child.sessionID])
 
@@ -350,6 +373,15 @@ export function TrunkRail(props: {
           </box>
         )}
       </For>
+      <Show when={usageLine()}>
+        {(line) => (
+          <box flexShrink={0} height={1} paddingLeft={1}>
+            <text fg={theme().muted} wrapMode="none">
+              {line()}
+            </text>
+          </box>
+        )}
+      </Show>
     </box>
   )
 }
@@ -497,6 +529,8 @@ export function TrunkSurface(props: {
   readonly now?: (() => number) | undefined
   /** Shared dismissal set, so a width change does not bring a row back. */
   readonly dismissed?: DismissedBranches | undefined
+  /** Gateway footer, forwarded to the rail. */
+  readonly usage?: UsageLive | undefined
 }) {
   const railWidth = () => Math.max(12, Math.round(((props.railPercent ?? 22) / 100) * props.terminalWidth))
   return (
@@ -521,6 +555,7 @@ export function TrunkSurface(props: {
           height={props.terminalHeight}
           now={props.now}
           dismissed={props.dismissed}
+          usage={props.usage}
         />
       </box>
     </Show>

@@ -200,4 +200,39 @@ export const migrations: readonly Migration[] = [
       `CREATE INDEX IF NOT EXISTS subagent_review_status_idx ON subagent_review_requests (status)`,
     ],
   },
+  {
+    // Tool usage kept one row per tool for the lifetime, with a single
+    // `session_id` column: the first session that used a tool owned it. Split
+    // attribution into its own table and keep `codegraph_tool_usage` as the
+    // lifetime rollup. `gateway_usage` records what the repository gateway did
+    // per session, so the sidebar can show swaps rather than only the tool that
+    // happened to run.
+    id: "20261105000100_tool_usage_attribution",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS tool_usage_session (
+        session_id text NOT NULL,
+        tool_id text NOT NULL,
+        last_used_at integer NOT NULL DEFAULT 0,
+        use_count integer NOT NULL DEFAULT 0,
+        PRIMARY KEY (session_id, tool_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS tool_usage_session_tool_idx ON tool_usage_session (tool_id)`,
+      // The pre-migration row named only the first session that used a tool;
+      // carry that attribution into the new table instead of dropping it.
+      `INSERT OR IGNORE INTO tool_usage_session (session_id, tool_id, last_used_at, use_count)
+        SELECT session_id, tool_id, last_used_at, use_count FROM codegraph_tool_usage
+        WHERE session_id IS NOT NULL`,
+      `CREATE TABLE IF NOT EXISTS gateway_usage (
+        session_id text NOT NULL,
+        from_tool text NOT NULL,
+        to_tool text NOT NULL,
+        route text NOT NULL,
+        last_used_at integer NOT NULL DEFAULT 0,
+        use_count integer NOT NULL DEFAULT 0,
+        bytes_saved integer NOT NULL DEFAULT 0,
+        PRIMARY KEY (session_id, from_tool, to_tool, route)
+      )`,
+      `CREATE INDEX IF NOT EXISTS gateway_usage_session_idx ON gateway_usage (session_id)`,
+    ],
+  },
 ]

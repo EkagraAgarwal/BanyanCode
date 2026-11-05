@@ -9,6 +9,7 @@ import { Locale } from "../../util/locale"
 import { EntryAnchor, GroupAnchor, visitEntries } from "./anchor-view"
 import { groupID } from "./anchors"
 import { instructionPaths, type PartRef, type SessionEntry, type SessionGroup, type SessionNode } from "./grouping/session"
+import { gatewayTally } from "../../util/tool-gateway"
 import { summarizeActivity } from "./activity-summary"
 import { InlineToolRow, reasoningContent, toolDisplay } from "./message-parts"
 import { use } from "./render-context"
@@ -124,7 +125,8 @@ function GroupContent(props: GroupProps) {
       ([name, count]) =>
         `${count} ${count === 1 ? name : name === "search" || name === "fetch" ? `${name}es` : `${name}s`}`,
     )
-    return `${completed() ? "Explored" : "Exploring"}: ${names.join(", ")}`
+    const tally = gatewayTally(tools().map((part) => (part.state.status === "streaming" ? undefined : part.state.metadata)))
+    return `${completed() ? "Explored" : "Exploring"}: ${names.join(", ")}${tally === "" ? "" : ` ${tally}`}`
   })
   const toggle = () => disclosure.toggle()
   const children = (mode: "normal" | "thought" | "tool") => (

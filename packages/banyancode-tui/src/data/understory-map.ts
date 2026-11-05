@@ -582,7 +582,7 @@ export interface Blast {
 
 /**
  * The ladder from `packages/banyancode/src/intel/blast-radius.ts:17-23` (the
- * `blast_radius` tool's score). It is not importable from this package (that
+ * `change_check op=blast_radius` score). It is not importable from this package (that
  * module is not exported from `@banyancode/plugin`) and the RPC takes a symbol,
  * not a file, so the thresholds live here in one place and nowhere else.
  */

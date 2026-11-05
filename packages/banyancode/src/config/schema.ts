@@ -127,6 +127,10 @@ const infoFields = {
   banyancode_route_glob: Schema.optional(Schema.Boolean),
   banyancode_router_trace: Schema.optional(Schema.Boolean),
   banyancode_augment_read: Schema.optional(Schema.Boolean),
+  banyancode_read_outline_lines: Schema.optional(Schema.Number).annotate({
+    description:
+      "A whole-file read of an indexed code file longer than this many lines returns the file outline instead. Defaults to 400. Repeat the read for the raw text.",
+  }),
   banyancode_goal_evaluator_model: Schema.optional(Schema.String),
   banyancode_max_goal_iterations: Schema.optional(Schema.Number),
   banyancode_goal_max_time_ms: Schema.optional(Schema.Number),

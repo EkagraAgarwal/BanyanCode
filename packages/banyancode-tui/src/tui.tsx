@@ -81,7 +81,14 @@ export default Plugin.define({
     })
     context.ui.slot({
       append: "sidebar.content",
-      render: () => <ToolUsagePanel context={context} usage={live.usage} codegraph={live.codegraph} />,
+      render: (input) => (
+        <ToolUsagePanel
+          context={context}
+          sessionID={input.sessionID}
+          usage={live.usage}
+          codegraph={live.codegraph}
+        />
+      ),
     })
     context.ui.slot({
       append: "sidebar.content",
@@ -121,6 +128,7 @@ export default Plugin.define({
           ticker={ticker}
           width={input.width}
           dismissed={dismissed}
+          usage={live.usage}
         />
       ),
     })

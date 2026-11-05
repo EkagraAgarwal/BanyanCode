@@ -62,6 +62,7 @@ describe("telemetry register", () => {
       const harness = await setup(directory)
       const rpc = harness.rpcs.find((entry) => entry.definition.id === "banyancode.usage")
       expect(Object.keys(rpc!.handlers).sort()).toEqual([
+        "gatewayUsage",
         "providerList",
         "providerRefresh",
         "providers",

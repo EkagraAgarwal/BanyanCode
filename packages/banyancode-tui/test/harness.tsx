@@ -20,6 +20,7 @@ import type {
   BuildState,
   CodegraphFile,
   CoreConfigOutput,
+  GatewayUsageResult,
   GraphMeta,
   MeshNode,
   ProviderUsageSnapshot,
@@ -354,6 +355,7 @@ export function systemLive(
 
 export function usageLive(input: {
   readonly tools?: readonly ToolUsageRow[]
+  readonly gateway?: GatewayUsageResult
   readonly providers?: readonly ProviderUsageSnapshot[]
   readonly availability?: "unknown" | "available" | "unavailable"
 } = {}): UsageLive {
@@ -362,8 +364,10 @@ export function usageLive(input: {
     providersAvailability: accessor(input.availability ?? "available"),
     error: accessor(undefined),
     tools: () => input.tools,
+    gateway: () => input.gateway,
     providers: () => input.providers,
     refreshTools: noop,
+    refreshGateway: noop,
     refreshProviders: noop,
   }
 }

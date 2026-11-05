@@ -2,111 +2,90 @@ export * as GatewayTypes from "./types.js"
 
 import type { Effect } from "effect"
 
-// Ported from v1 `packages/core/src/banyancode/gateway/types.ts` (spec §20/§109),
-// trimmed to the pieces the v2 tool-hook gateway consumes.
+// v2 repository gateway seam.
+//
+// Routing is a pure function of (tool, arguments, graph probe result, this
+// session's swap ledger). Nothing reads the conversation: the same call routes
+// the same way whatever the user typed.
 
-export interface RepositoryToolCall {
-  readonly tool: string
-  readonly arguments: Record<string, unknown>
+export type GatewayRouteName = "swapped" | "fallback" | "augmented" | "direct"
+
+/** Stamped on the tool result (and persisted on the tool part). */
+export interface GatewayMetadata {
+  readonly route: GatewayRouteName
+  readonly from: string
+  readonly to?: string
+  /** Target operation (`outline`, `files`, `usages`). */
+  readonly op?: string
+  readonly reason: string
+  /** Only for an outline read: file bytes minus returned bytes. */
+  readonly bytesSaved?: number
 }
 
-export type Relation =
-  | "callers"
-  | "callees"
-  | "references"
-  | "dependents"
-  | "imports"
-  | "implementations"
-  | "extensions"
-
-export interface RepositoryRequest {
-  readonly source: "model-tool" | "native-banyan-tool" | "internal"
-  readonly originalTool: string
-  readonly arguments: Record<string, unknown>
-  readonly sessionID?: string
-  readonly userRequest?: string
-  readonly recentToolCalls?: readonly RepositoryToolCall[]
-}
-
-export type RepositoryOperation =
-  | { readonly kind: "content"; readonly path: string; readonly range?: { readonly startLine?: number; readonly endLine?: number } }
-  | { readonly kind: "text_search"; readonly pattern: string; readonly paths?: readonly string[] }
-  | { readonly kind: "file_discovery"; readonly pattern: string; readonly path?: string }
-  | { readonly kind: "symbol"; readonly query: string; readonly path?: string }
-  | { readonly kind: "relationship"; readonly relation: Relation; readonly target: string }
-  | { readonly kind: "structural"; readonly query: string; readonly language?: string }
-  | { readonly kind: "architecture"; readonly query: string }
-  | { readonly kind: "ownership"; readonly query: string }
-
-export type RepositoryRoute = "direct" | "augment" | "intelligence"
-
-export interface RouteDecision {
-  readonly route: RepositoryRoute
-  readonly operation?: RepositoryOperation
-  readonly confidence: number
-  readonly reasonCodes: readonly string[]
-  readonly router?: string
-  readonly routerVersion?: string
-  readonly policyVersion?: string
-}
-
-export interface RouterInput {
-  readonly userRequest?: string
-  readonly toolName: string
-  readonly arguments: Record<string, unknown>
-  readonly recentToolCalls: readonly RepositoryToolCall[]
-}
-
-// Never-failing by contract: routers implement fail-closed semantics and must
-// always resolve to a RouteDecision.
-export interface ToolRouter {
-  readonly classify: (input: RouterInput) => Effect.Effect<RouteDecision, never, never>
-}
-
-/** The route a repository operation should take (v1 routing/types.ts). */
-export type RouteVerdict = "direct" | "intelligence" | "hybrid"
-
-export interface RuleInput {
-  readonly toolName: string
-  readonly arguments: Record<string, unknown>
-  readonly userRequest?: string
-  readonly paths?: string[]
-}
-
-export interface RuleVerdict {
-  readonly verdict: RouteVerdict
-  readonly reasonCodes: string[]
-  readonly confidence: number
-}
-
-/** A tool call rewrite produced by the codegraph adapter. */
-export interface GatewayRewrite {
+export interface GatewayTarget {
   readonly tool: string
   readonly input: Record<string, unknown>
+  readonly op: string
 }
 
 /**
- * Small seam the lead satisfies once the codegraph port lands. Every method is
- * optional: a partial or missing adapter keeps the corresponding gateway
- * feature a byte-for-byte no-op.
+ * What the graph knows about one call, measured in `execute.before`. Cheap,
+ * bounded, indexed lookups only; an error or a timeout yields
+ * `UNPROBED` (which always falls back).
  */
-export interface CodegraphQuery {
-  /**
-   * Map an INTELLIGENCE decision (symbol/relationship operation) onto a
-   * registered codegraph tool call. Returning undefined (or throwing) makes
-   * the gateway fall through to the original tool.
-   */
-  readonly route?: (input: {
-    readonly operation: RepositoryOperation
-    readonly call: { readonly tool: string; readonly input: Record<string, unknown> }
-    readonly sessionID: string
-  }) => Effect.Effect<GatewayRewrite | undefined, never, never>
-  /**
-   * Compact symbol header for a code-file read. Returning undefined (or
-   * throwing) leaves the read result untouched.
-   */
-  readonly augmentRead?: (input: {
-    readonly path: string
-    readonly sessionID: string
-  }) => Effect.Effect<string | undefined, never, never>
+export interface ProbeResult {
+  readonly graphBuilt: boolean
+  /** Graph-level staleness (age/coverage) for grep and glob. */
+  readonly stale: boolean
+  /** Exact-name node candidates for a grep identifier. */
+  readonly symbolHits?: number
+  /** Indexed file facts for a read. */
+  readonly indexed?: boolean
+  readonly fileStale?: boolean
+  readonly lines?: number
+  readonly bytes?: number
+  /** Indexed paths matching a glob, bounded to 1. */
+  readonly matchCount?: number
+}
+
+export interface ProbeInput {
+  readonly tool: string
+  readonly arguments: Record<string, unknown>
+  readonly root: string
+}
+
+/** Never fails: a probe problem falls back to the original tool. */
+export interface GatewayProbe {
+  readonly probe: (input: ProbeInput) => Effect.Effect<ProbeResult, never, never>
+  /** Compact symbol header for a code-file read. */
+  readonly augmentRead?: (input: { readonly path: string; readonly sessionID: string }) => Effect.Effect<
+    string | undefined,
+    never,
+    never
+  >
+}
+
+export const UNPROBED: ProbeResult = { graphBuilt: false, stale: true }
+
+export type RouteKind = "direct" | "swap" | "fallback" | "augment"
+
+export interface Decision {
+  readonly route: RouteKind
+  readonly reason: string
+  readonly target?: GatewayTarget
+}
+
+/** The pure routing input. `repeat` is the session ledger's only contribution. */
+export interface DecideInput {
+  readonly tool: string
+  readonly arguments: Record<string, unknown>
+  readonly probe: ProbeResult
+  /** An identical call was already swapped in this session. */
+  readonly repeat: boolean
+  /** Project root, forward slashes. Paths outside it never swap. */
+  readonly root: string
+  /** `banyancode_read_outline_lines`. */
+  readonly readOutlineLines: number
+  /** Whether a rewrite target is registered and permitted for this agent. */
+  readonly allows: (tool: string) => boolean
 }

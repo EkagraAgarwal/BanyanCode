@@ -14,6 +14,26 @@ const ToolUsageResult = Schema.Struct({
   tools: Schema.Array(ToolUsageRow),
 }).annotate({ identifier: "Banyan.ToolUsageResult" })
 
+const GatewayUsageRow = Schema.Struct({
+  fromTool: Schema.String,
+  toTool: Schema.String,
+  route: Schema.Literals(["swapped", "fallback", "augmented", "direct"]),
+  useCount: Schema.Number,
+  bytesSaved: Schema.Number,
+  lastUsedAt: Schema.Number,
+}).annotate({ identifier: "Banyan.GatewayUsageRow" })
+
+const GatewayUsageResult = Schema.Struct({
+  rows: Schema.Array(GatewayUsageRow),
+  summary: Schema.Struct({
+    swapped: Schema.Number,
+    fallback: Schema.Number,
+    augmented: Schema.Number,
+    direct: Schema.Number,
+    bytesSaved: Schema.Number,
+  }),
+}).annotate({ identifier: "Banyan.GatewayUsageResult" })
+
 const TokenUsageResult = Schema.Struct({
   events: Schema.Array(TokenUsageEvent),
 }).annotate({ identifier: "Banyan.TokenUsageResult" })
@@ -52,6 +72,10 @@ export const Definition = Rpc.define({
     toolUsage: {
       input: Schema.Struct({ session: Schema.optional(Schema.String) }),
       output: ToolUsageResult,
+    },
+    gatewayUsage: {
+      input: Schema.Struct({ session: Schema.optional(Schema.String) }),
+      output: GatewayUsageResult,
     },
     tokenUsage: {
       input: Schema.Struct({

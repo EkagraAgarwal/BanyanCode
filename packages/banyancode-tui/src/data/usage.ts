@@ -180,19 +180,57 @@ export function statusLine(snapshot: ProviderUsageSnapshot): string {
 }
 
 /** Tool IDs that count as graph adoption in the tool-usage summary. */
-export const GRAPH_FAMILY = new Set([
-  "codegraph_build",
-  "codegraph_remove",
-  "code_find",
-  "repository_query",
-  "repository_explain",
-  "repository_impact",
-  "repository_trace",
-  "repository_tests",
-  "blast_radius",
-  "preflight",
-  "safe_rename",
-  "edit_plan",
-  "banyan_tool_search",
-  "banyan_test",
-])
+export const GRAPH_FAMILY = new Set(["code_find", "repo", "change_check", "safe_rename", "codegraph"])
+
+export interface GatewaySummary {
+  readonly swapped: number
+  readonly fallback: number
+  readonly augmented: number
+  readonly direct: number
+  readonly bytesSaved: number
+}
+
+/** `~180 KB` — the sidebar has no room for a fractional unit. */
+export function gatewayBytesSaved(bytes: number): string {
+  if (bytes < 1024) return `~${Math.round(bytes)} B`
+  if (bytes < 1024 * 1024) return `~${Math.round(bytes / 1024)} KB`
+  return `~${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/**
+ * `gateway 42 swapped · 5 fallback · 18 raw · ~180 KB saved`.
+ * "raw" counts the calls that ran the original tool, augmented reads included.
+ * `width` picks a shorter spelling for the narrow left rail; the full line wraps
+ * in the sidebar instead.
+ */
+export function gatewaySummaryLine(
+  summary: GatewaySummary | undefined,
+  width = Number.POSITIVE_INFINITY,
+): string | undefined {
+  if (summary === undefined) return undefined
+  const raw = summary.direct + summary.augmented
+  if (summary.swapped === 0 && summary.fallback === 0 && raw === 0) return undefined
+  const saved = summary.bytesSaved > 0 ? gatewayBytesSaved(summary.bytesSaved) : undefined
+  const full = `gateway ${summary.swapped} swapped · ${summary.fallback} fallback · ${raw} raw${saved === undefined ? "" : ` · ${saved} saved`}`
+  if (full.length <= width) return full
+  const compact = `${summary.swapped}⇢ ${summary.fallback}↩ ${raw} raw${saved === undefined ? "" : ` ${saved}`}`
+  if (compact.length <= width) return compact
+  return `${summary.swapped}⇢ ${summary.fallback}↩ ${raw}`
+}
+
+/**
+ * What a swapped tool replaced: `← grep`, or `← grep+glob` when several tools
+ * were rewritten onto it. Undefined when the tool only ran directly.
+ */
+export function gatewayReplacedBy(
+  toolId: string,
+  rows: ReadonlyArray<{ readonly fromTool: string; readonly toTool: string; readonly route: string }> | undefined,
+): string | undefined {
+  if (rows === undefined) return undefined
+  const froms = [
+    ...new Set(
+      rows.filter((row) => row.route === "swapped" && row.toTool === toolId).map((row) => row.fromTool),
+    ),
+  ].sort()
+  return froms.length === 0 ? undefined : `← ${froms.join("+")}`
+}

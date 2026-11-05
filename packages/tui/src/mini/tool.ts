@@ -25,6 +25,7 @@ import {
   toolDisplayMetadata,
   webSearchProviderLabel,
 } from "../util/tool-display"
+import { gatewayMarkerText } from "../util/tool-gateway"
 import { formatPath } from "../util/path-format"
 import { isRecord } from "../util/record"
 import { parseTodos, todoMarker } from "../util/todo"
@@ -351,7 +352,9 @@ function runGlob(p: ToolProps): ToolInline {
   const title = `Glob "${p.input.pattern ?? ""}"`
   const suffix = root ? `in ${displayPath(p, root)}` : ""
   const matches = p.metadata.count
-  const description = matches === undefined ? suffix : `${suffix}${suffix ? " · " : ""}${count(matches, "match")}`
+  const countText = matches === undefined ? "" : count(matches, "match")
+  const marker = gatewayMarkerText(p.metadata)
+  const description = [suffix, countText, marker].filter((part) => part !== undefined && part !== "").join(" · ")
   return {
     icon: "✱",
     title,
@@ -364,7 +367,9 @@ function runGrep(p: ToolProps): ToolInline {
   const title = `Grep "${p.input.pattern ?? ""}"`
   const suffix = root ? `in ${displayPath(p, root)}` : ""
   const matches = p.metadata.matches
-  const description = matches === undefined ? suffix : `${suffix}${suffix ? " · " : ""}${count(matches, "match")}`
+  const countText = matches === undefined ? "" : count(matches, "match")
+  const marker = gatewayMarkerText(p.metadata)
+  const description = [suffix, countText, marker].filter((part) => part !== undefined && part !== "").join(" · ")
   return {
     icon: "✱",
     title,
@@ -382,7 +387,9 @@ function runList(p: ToolProps): ToolInline {
 
 function runRead(p: ToolProps): ToolInline {
   const file = displayPath(p, p.input.path)
-  const description = primitiveInputSummary(p.frame.input, ["path"]) || undefined
+  const marker = gatewayMarkerText(p.metadata)
+  const summary = primitiveInputSummary(p.frame.input, ["path"])
+  const description = [summary, marker].filter((part) => part !== undefined && part !== "").join(" · ") || undefined
   return {
     icon: "→",
     title: `Read ${file}`,

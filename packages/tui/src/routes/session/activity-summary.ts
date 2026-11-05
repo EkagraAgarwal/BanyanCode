@@ -5,6 +5,7 @@ import type {
   SessionMessageInfo,
 } from "@opencode/client"
 import { canonicalToolName, executeCalls } from "../../util/tool-display"
+import { gatewayTally } from "../../util/tool-gateway"
 import { visitEntries } from "./anchor-view"
 import { instructionPaths, type PartRef, type SessionEntry, type SessionNode } from "./grouping/session"
 import { reasoningContent } from "./message-parts"
@@ -85,11 +86,21 @@ export function activitySummary(items: readonly Item[], instructions: number, cl
     else if (name === "edit" || name === "write" || name === "patch") counts.edit++
     else counts.tool++
   })
+  const tally = gatewayTally(
+    items.flatMap((item) =>
+      item.part.type === "tool" && item.part.state.status !== "streaming" ? [item.part.state.metadata] : [],
+    ),
+  )
   return {
-    label: Object.entries(counts)
-      .filter(([, count]) => count > 0)
-      .map(([name, count]) => `${count} ${name}${count === 1 ? "" : "s"}`)
-      .join(", "),
+    label: [
+      Object.entries(counts)
+        .filter(([, count]) => count > 0)
+        .map(([name, count]) => `${count} ${name}${count === 1 ? "" : "s"}`)
+        .join(", "),
+      tally,
+    ]
+      .filter((text) => text !== "")
+      .join(" "),
     active: items.some((item) => isActive(item, closed)),
   }
 }

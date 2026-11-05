@@ -143,6 +143,18 @@ export const ToolUsageRow = Schema.Struct({
 }).annotate({ identifier: "BanyanCodeTui/ToolUsageRow" })
 export type ToolUsageRow = typeof ToolUsageRow.Type
 
+export const GatewayUsageRow = Schema.Struct({
+  fromTool: Schema.String,
+  toTool: Schema.String,
+  route: Schema.Literals(["swapped", "fallback", "augmented", "direct"]),
+  useCount: Schema.Number,
+  bytesSaved: Schema.Number,
+  lastUsedAt: Schema.Number,
+}).annotate({ identifier: "BanyanCodeTui/GatewayUsageRow" })
+export type GatewayUsageRow = typeof GatewayUsageRow.Type
+
+export type GatewayUsageResult = TypeOf<(typeof UsageDefinition.methods)["gatewayUsage"]["output"]>
+
 export const ProviderUsageWindow = Schema.Struct({
   id: Schema.String,
   label: Schema.String,

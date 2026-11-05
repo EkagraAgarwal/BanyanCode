@@ -79,17 +79,9 @@ const TOOL_LETTERS: Readonly<Record<string, ToolLetter>> = {
   structural_queries: "S",
   "structural-queries": "S",
   banyan_tool_search: "S",
-  repository_query: "S",
-  repository_explain: "S",
-  repository_impact: "S",
-  repository_trace: "S",
-  repository_tests: "S",
-  repository_symbols: "S",
-  repository_relationships: "S",
-  repository_ownership: "S",
-  blast_radius: "S",
-  preflight: "S",
-  edit_plan: "S",
+  repo: "S",
+  change_check: "S",
+  codegraph: "S",
   safe_rename: "E",
   edit: "E",
   write: "E",
@@ -107,15 +99,13 @@ const TOOL_LETTERS: Readonly<Record<string, ToolLetter>> = {
 
 /**
  * The single letter a tool block carries. Unclassified tools (todowrite,
- * skill, question, codegraph_build, ...) get `?`; they are never `T`, so a
+ * skill, question, codegraph, ...) get `?`; they are never `T`, so a
  * task block is only ever a real subagent spawn.
  */
 export function toolKind(name: string): ToolLetter {
   const canonical = canonicalTool(name)
   const letter = TOOL_LETTERS[canonical]
   if (letter !== undefined) return letter
-  if (canonical.startsWith("repository_")) return "S"
-  if (canonical.startsWith("codegraph_")) return "S"
   if (canonical.startsWith("banyan_")) return "V"
   return "?"
 }

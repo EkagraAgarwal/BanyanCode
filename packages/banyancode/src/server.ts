@@ -7,7 +7,7 @@ import { makeServices as makeCodegraphServices, register as registerCodegraph } 
 import { BanyanConfig, setConfigUpdatedListener, summarize, updateConfig, type Loaded } from "./config/index.js"
 import { register as registerGateway } from "./gateway/index.js"
 import { empty as emptyCodegraphPort, make as makeCodegraphPort } from "./integration/codegraph-port.js"
-import { make as makeCodegraphQuery } from "./integration/codegraph-query.js"
+import { make as makeGatewayProbe } from "./integration/gateway-probe.js"
 import { withJsonSafeRpc } from "./integration/json-rpc.js"
 import { ensureReadyForRepositoryTools } from "./codegraph/codegraph-readiness.js"
 import { isHomeOrAbove } from "./codegraph/workspace-identity.js"
@@ -181,6 +181,7 @@ export default Plugin.define({
       registerIntel(ctx, {
         ...deps,
         codegraph: port,
+        ...(codegraph === undefined ? {} : { graph: { search: codegraph.search, structural: codegraph.structural } }),
         ...(codegraph === undefined || isHomeOrAbove(projectRoot)
           ? {}
           : { ensureGraph: () => ensureReadyForRepositoryTools(codegraph.readiness, projectRoot) }),
@@ -190,7 +191,8 @@ export default Plugin.define({
     yield* isolated("agents", registerAgents(ctx, { config }))
     yield* isolated("websearch", registerWebsearch(ctx, { config }))
 
-    // 3e — the gateway may only rewrite onto tools that are actually registered.
+    // 3e — the gateway may only rewrite onto tools that are actually registered,
+    // and only when the agent's rules do not deny them.
     const availableTools = yield* ctx.tool.list().pipe(
       Effect.map((tools) => new Set(tools.map((tool) => tool.id))),
       Effect.catchCause((cause) =>
@@ -199,8 +201,11 @@ export default Plugin.define({
         }).pipe(Effect.as(new Set<string>())),
       ),
     )
-    const query = codegraph === undefined ? {} : makeCodegraphQuery(codegraph.repo, { availableTools })
-    yield* isolated("gateway", registerGateway(ctx, { ...deps, codegraph: query }))
+    const query = codegraph === undefined ? undefined : makeGatewayProbe(codegraph.repo, { storage })
+    yield* isolated(
+      "gateway",
+      registerGateway(ctx, { ...deps, ...(query === undefined ? {} : { codegraph: query }), availableTools }),
+    )
 
     yield* isolated("telemetry", registerTelemetry(ctx, deps))
     yield* isolated("yolo", registerYolo(ctx, { config }))

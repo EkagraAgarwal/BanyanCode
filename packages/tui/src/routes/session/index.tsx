@@ -59,6 +59,7 @@ import {
   toolDisplayMetadata,
   type ExecuteCall,
 } from "../../util/tool-display"
+import { gatewayMarker } from "../../util/tool-gateway"
 import { DialogExecute } from "./dialog-execute"
 import { RetryProvider } from "../../component/retry-provider"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
@@ -2762,6 +2763,7 @@ function GenericTool(props: ToolProps) {
         pending={props.tool}
         spinner={loading()}
         part={props.part}
+        status={<GatewayMark metadata={props.metadata} />}
         onClick={expandable() ? () => setExpanded((value) => !value) : undefined}
       >
         {genericToolSummary(props.tool, props.input)}
@@ -2891,8 +2893,22 @@ function InlineTool(props: {
   )
 }
 
-function StatusBadge(props: { children: string; raised?: boolean }) {
+/**
+ * The gateway's provenance marker: a swap names the tool that ran, a fallback
+ * names the short reason, an augmented read gets a small note, and a direct call
+ * renders nothing. Rendered beside the tool label so narrow widths can wrap it.
+ */
+export function GatewayMark(props: { readonly metadata: Record<string, unknown> }) {
   const theme = useTheme()
+  const marker = createMemo(() => gatewayMarker(props.metadata))
+  const color = (tone: "accent" | "muted" | "faint") =>
+    tone === "accent" ? theme.text.feedback.info.base : tone === "muted" ? theme.text.muted : theme.text.faint
+  return (
+    <Show when={marker()}>{(value) => <text fg={color(value().tone)}>{value().text}</text>}</Show>
+  )
+}
+
+function StatusBadge(props: { children: string; raised?: boolean }) {  const theme = useTheme()
   const background = () => (props.raised ? theme.background.raised.base : theme.background.base)
   return (
     <text flexShrink={0} bg={theme.decrease(background())} fg={theme.text.muted}>
@@ -3221,7 +3237,13 @@ function Write(props: ToolProps) {
 function Glob(props: ToolProps) {
   const pathFormatter = usePathFormatter()
   return (
-    <InlineTool icon="✱" pending="Finding files…" complete={stringValue(props.input.pattern)} part={props.part}>
+    <InlineTool
+      icon="✱"
+      pending="Finding files…"
+      complete={stringValue(props.input.pattern)}
+      part={props.part}
+      status={<GatewayMark metadata={props.metadata} />}
+    >
       Glob "{stringValue(props.input.pattern)}"{" "}
       <Show when={stringValue(props.input.path)}>in {pathFormatter.format(stringValue(props.input.path))} </Show>
       <Show when={finiteNumber(props.metadata.count)}>
@@ -3249,6 +3271,7 @@ function Read(props: ToolProps) {
         complete={stringValue(props.input.path)}
         spinner={isRunning()}
         part={props.part}
+        status={<GatewayMark metadata={props.metadata} />}
       >
         Read {pathFormatter.format(stringValue(props.input.path))}
         <Show when={props.input.offset !== undefined || props.input.limit !== undefined}>
@@ -3272,7 +3295,13 @@ function Read(props: ToolProps) {
 function Grep(props: ToolProps) {
   const pathFormatter = usePathFormatter()
   return (
-    <InlineTool icon="✱" pending="Searching content…" complete={stringValue(props.input.pattern)} part={props.part}>
+    <InlineTool
+      icon="✱"
+      pending="Searching content…"
+      complete={stringValue(props.input.pattern)}
+      part={props.part}
+      status={<GatewayMark metadata={props.metadata} />}
+    >
       Grep "{stringValue(props.input.pattern)}"{" "}
       <Show when={stringValue(props.input.path)}>in {pathFormatter.format(stringValue(props.input.path))} </Show>
       <Show when={finiteNumber(props.metadata.matches)}>

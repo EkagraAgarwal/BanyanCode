@@ -59,7 +59,7 @@ const fixture = {
   mesh: meshLive({ root: meshNode({ sessionID: "ses_root", state: "running", children: [meshNode({ sessionID: "ses_child", state: "running", agent: "coder" })] }) }),
   system: systemLive({ status: { cpuPercent: 12, memoryUsedBytes: 4 * 1024 ** 3, memoryTotalBytes: 16 * 1024 ** 3, diskUsedBytes: 100 * 1024 ** 3, diskTotalBytes: 500 * 1024 ** 3, platform: "windows" } }),
   usage: usageLive({
-    tools: [{ toolId: "repository_query", useCount: 4, lastUsedAt: Math.floor(Date.now() / 1000) - 60 }],
+    tools: [{ toolId: "repo", useCount: 4, lastUsedAt: Math.floor(Date.now() / 1000) - 60 }],
     providers: [
       {
         providerID: "anthropic",

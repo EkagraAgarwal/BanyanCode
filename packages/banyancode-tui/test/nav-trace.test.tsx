@@ -38,7 +38,7 @@ test("intel trace keeps a clean empty state and renders trace entries", async ()
   }
 
   const entries: IntelEntry[] = [
-    { id: "i1", kind: "trace", query: "repository_query", summary: "found symbol MemoryRepo" },
+    { id: "i1", kind: "trace", query: "repo", summary: "found symbol MemoryRepo" },
   ]
   const withEntries = await mount(
     () => <IntelTracePanel context={context()} sessionID="ses_root" intel={intelLive({ entries })} />,
@@ -46,7 +46,7 @@ test("intel trace keeps a clean empty state and renders trace entries", async ()
   )
   try {
     const frame = withEntries.captureCharFrame()
-    expect(frame).toContain("repository_query")
+    expect(frame).toContain("repo")
     expect(frame).toContain("found symbol MemoryRepo")
   } finally {
     withEntries.renderer.destroy()

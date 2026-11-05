@@ -18,6 +18,7 @@ import type {
   CodegraphFile,
   CodegraphNode,
   CoreConfigOutput,
+  GatewayUsageResult,
   GraphMeta,
   MeshLimits,
   MeshNode,
@@ -118,8 +119,10 @@ export interface UsageLive {
   readonly providersAvailability: Accessor<Availability>
   readonly error: Accessor<string | undefined>
   tools(sessionID?: string): readonly ToolUsageRow[] | undefined
+  gateway(sessionID?: string): GatewayUsageResult | undefined
   providers(): readonly ProviderUsageSnapshot[] | undefined
   refreshTools(sessionID?: string): Promise<void>
+  refreshGateway(sessionID?: string): Promise<void>
   refreshProviders(force?: boolean): Promise<void>
 }
 
@@ -575,6 +578,7 @@ export function createLive(context: Context): Live {
   const [providersAvailability, setProvidersAvailability] = createSignal<Availability>("unknown")
   const [usageError, setUsageError] = createSignal<string | undefined>(undefined)
   const [toolRows, setToolRows] = createSignal<ReadonlyMap<string, readonly ToolUsageRow[]>>(new Map())
+  const [gatewayRows, setGatewayRows] = createSignal<ReadonlyMap<string, GatewayUsageResult>>(new Map())
   const [providerRows, setProviderRows] = createSignal<readonly ProviderUsageSnapshot[] | undefined>(undefined)
 
   const refreshTools = async (sessionID?: string) => {
@@ -589,6 +593,20 @@ export function createLive(context: Context): Live {
     const next = new Map(toolRows())
     next.set(key, result.value.tools)
     setToolRows(next)
+  }
+
+  const refreshGateway = async (sessionID?: string) => {
+    const result = await attempt(() => rpc.usage.gatewayUsage(sessionID === undefined ? {} : { session: sessionID }))
+    if (disposed) return
+    setToolsAvailability(availabilityOf(result))
+    if (!result.ok) {
+      if (!result.unavailable) setUsageError(result.message)
+      return
+    }
+    const key = sessionID ?? "*"
+    const next = new Map(gatewayRows())
+    next.set(key, result.value)
+    setGatewayRows(next)
   }
 
   const refreshProviders = async (force = false) => {
@@ -716,8 +734,10 @@ export function createLive(context: Context): Live {
       providersAvailability,
       error: usageError,
       tools: (sessionID) => toolRows().get(sessionID ?? "*"),
+      gateway: (sessionID) => gatewayRows().get(sessionID ?? "*"),
       providers: providerRows,
       refreshTools,
+      refreshGateway,
       refreshProviders,
     },
     intel: {

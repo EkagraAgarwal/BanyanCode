@@ -14,7 +14,8 @@ import {
 import { makeProviderUsage, observeRateLimitResponse } from "./provider-usage.js"
 import { Definition } from "./rpc.js"
 import { make, retentionMsFromDays } from "./tokens.js"
-import { listToolUsage, recordToolUsage } from "./usage.js"
+import { listGatewayUsage, listToolUsage, recordToolUsage } from "./usage.js"
+
 
 export interface TelemetryDeps {
   readonly storage: Storage.Interface
@@ -97,6 +98,9 @@ export const register = (ctx: Context, deps: TelemetryDeps): Effect.Effect<void,
       .register(Definition, {
         toolUsage: (input) =>
           listToolUsage(deps.storage, input.session === undefined ? undefined : { session: input.session }),
+        gatewayUsage: (input) =>
+          listGatewayUsage(deps.storage, input.session === undefined ? undefined : { session: input.session }),
+
         tokenUsage: (input) =>
           Effect.sync(() => ({
             events: tokens.recent({

@@ -1,4 +1,5 @@
 import type { Context } from "@opencode/plugin/effect/plugin"
+import type { Permission } from "@opencode/schema/permission"
 import { Effect, Stream, type Scope } from "effect"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -19,6 +20,8 @@ export interface HarnessOptions {
     readonly force?: boolean
     readonly providerID?: string
   }) => Effect.Effect<{ readonly snapshots: ReadonlyArray<unknown> }, unknown>
+  /** The agent's permission rules, as the host resolves them for a request. */
+  readonly permissions?: Permission.Ruleset
 }
 
 export interface Harness {
@@ -51,6 +54,15 @@ export const makeContext = (directory: string, options: HarnessOptions = {}): Ha
     location: {
       directory,
       project: { directory, canonical: directory },
+    },
+    agent: {
+      get: (input: { readonly agentID: string }) =>
+        Effect.succeed({
+          data: {
+            id: input.agentID,
+            permissions: options.permissions ?? [],
+          },
+        }),
     },
     tool: { hook: hook(tool) },
     permission: { hook: hook(permission) },
