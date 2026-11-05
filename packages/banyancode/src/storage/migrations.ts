@@ -235,4 +235,20 @@ export const migrations: readonly Migration[] = [
       `CREATE INDEX IF NOT EXISTS gateway_usage_session_idx ON gateway_usage (session_id)`,
     ],
   },
+  {
+    // An unscoped UPDATE trigger re-tokenized a node's whole body twice for any
+    // column, so recomputing in_degree, which FTS doesn't index, rewrote the
+    // trigram index for every node: 22 s of a full build and a third of the
+    // database file. Only the indexed columns may fire it.
+    id: "20261105000200_fts_update_indexed_columns",
+    statements: [
+      `DROP TRIGGER IF EXISTS codegraph_nodes_fts_update`,
+      `CREATE TRIGGER codegraph_nodes_fts_update AFTER UPDATE OF name, signature, code ON codegraph_nodes BEGIN
+        INSERT INTO codegraph_nodes_fts (codegraph_nodes_fts, rowid, name, signature, code)
+        VALUES ('delete', old.rowid, old.name, COALESCE(old.signature, ''), COALESCE(old.code, ''));
+        INSERT INTO codegraph_nodes_fts (rowid, name, signature, code)
+        VALUES (new.rowid, new.name, COALESCE(new.signature, ''), COALESCE(new.code, ''));
+      END`,
+    ],
+  },
 ]
