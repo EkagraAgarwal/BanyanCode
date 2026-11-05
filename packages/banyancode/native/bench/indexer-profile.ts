@@ -14,6 +14,13 @@
  *   BANYANCODE_NATIVE_INDEXER=off                                   TS + batched writes
  *   (defaults)                                                      native + batched writes
  *
+ * BANYANCODE_PROFILE_REBUILD=1 builds once to populate the database and reports
+ * a second forced build over it, the path a user's "rebuild" takes.
+ *
+ * Event-loop stalls are sampled in this process, which is the same thread the
+ * indexer runs on, so they are what a client of the host would feel. A 2 ms timer
+ * records every gap; a stall is a gap over 100 ms.
+ *
  * Prints one JSON line per run plus a median summary.
  */
 import { mkdtemp, readFile, rm } from "node:fs/promises"
@@ -41,7 +48,19 @@ for (let run = 0; run < runs; run++) {
   const reportPath = join(dbDir, "profile.json")
   process.env.BANYANCODE_PROJECT_DB_DIR = dbDir
   process.env.BANYANCODE_INDEX_PROFILE = reportPath
-  const started = performance.now()
+  const started = { at: performance.now() }
+  const stalls = { max: 0, over100: 0, over1000: 0, totalOver100: 0, last: performance.now() }
+  const sampler = setInterval(() => {
+    const now = performance.now()
+    const gap = now - stalls.last
+    stalls.last = now
+    if (gap > stalls.max) stalls.max = gap
+    if (gap > 100) {
+      stalls.over100++
+      stalls.totalOver100 += gap
+    }
+    if (gap > 1000) stalls.over1000++
+  }, 2)
   try {
     await Effect.runPromise(
       Effect.scoped(
@@ -49,28 +68,40 @@ for (let run = 0; run < runs; run++) {
           const storage = yield* Storage.open({ projectRoot: root, env: process.env })
           const repo = makeRepo(storage)
           const indexer = yield* makeIndexer(repo, storage)
+          if (process.env.BANYANCODE_PROFILE_REBUILD === "1") {
+            yield* indexer.index({ root, force: true })
+            started.at = performance.now()
+            Object.assign(stalls, { max: 0, over100: 0, over1000: 0, totalOver100: 0, last: performance.now() })
+          }
           yield* indexer.index({ root, force: true })
         }),
       ),
     )
   } finally {
+    clearInterval(sampler)
     delete process.env.BANYANCODE_INDEX_PROFILE
   }
-  const wallMs = performance.now() - started
+  const wallMs = performance.now() - started.at
   const report = JSON.parse(await readFile(reportPath, "utf8")) as Record<string, unknown>
   const native = report.nativeTimings as
     | { walkMs: number; readMs: number; hashMs: number; parseMs: number; totalMs: number }
     | undefined
+  const derived = (report.derived ?? {}) as Record<string, number>
   const row: Record<string, number | string> = {
     label,
     run: run + 1,
     backend: String(report.backend ?? "?"),
     wallMs: Math.round(wallMs),
+    stallMaxMs: Math.round(stalls.max),
+    stallsOver100: stalls.over100,
+    stallsOver1000: stalls.over1000,
+    stallTotalOver100Ms: Math.round(stalls.totalOver100),
     walkMs: Math.round(Number(report.walkMs ?? 0)),
     readMs: Math.round(Number(report.readMs ?? 0)),
     parseMs: Math.round(Number(report.parseMs ?? 0)),
     sqliteWriteMs: Math.round(Number(report.sqliteWriteMs ?? 0)),
     edgeResolveMs: Math.round(Number(report.edgeResolveMs ?? 0)),
+    ...Object.fromEntries(Object.entries(derived).map(([key, value]) => [`derived.${key}`, Math.round(value)])),
     checkpointMs: Math.round(Number(report.checkpointMs ?? 0)),
     pruneMs: Math.round(Number(report.pruneMs ?? 0)),
     bumpMs: Math.round(Number(report.bumpMs ?? 0)),
@@ -88,6 +119,10 @@ for (let run = 0; run < runs; run++) {
 
 const fields = [
   "wallMs",
+  "stallMaxMs",
+  "stallsOver100",
+  "stallsOver1000",
+  "stallTotalOver100Ms",
   "walkMs",
   "readMs",
   "parseMs",
@@ -102,5 +137,6 @@ const fields = [
   "nativeTotalMs",
 ] as const
 const summary: Record<string, number> = {}
-for (const field of fields) summary[field] = median(results.map((row) => Number(row[field] ?? 0)))
+const derivedFields = Object.keys(results[0] ?? {}).filter((key) => key.startsWith("derived."))
+for (const field of [...fields, ...derivedFields]) summary[field] = median(results.map((row) => Number(row[field] ?? 0)))
 console.log(`median ${label} ${JSON.stringify(summary)}`)

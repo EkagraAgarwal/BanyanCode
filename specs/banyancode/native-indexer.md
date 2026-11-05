@@ -99,7 +99,135 @@ workers), and 0 files panic.
 
 The rest of the build is now almost entirely SQLite writes and derived-edge
 resolution, about 96% of wall time, which no parser rewrite can touch. That is
-the next place to look, not more Rust parsing.
+the next place to look, not more Rust parsing. Section 4a is that follow-up.
+
+## 4a. SQLite writes and derived edges
+
+Same tree as above, frozen as a copy of `packages/` (5,430 walked, 5,427
+indexed), native backend, fresh database per run. `indexer-profile.ts` now also
+samples event-loop stalls on the indexer's own thread (a 2 ms timer; a stall is
+a gap over 100 ms), which is what a client of the host feels, and splits
+`edgeResolveMs` into `derived.*` sub-phases.
+
+### Where the 87.9 s went
+
+Median of three runs on AC power, before any change (96.1 / 87.9 / 86.6 s):
+
+| phase | median |
+| --- | --- |
+| SQLite writes | 38.2 s |
+| derived edges | 45.8 s |
+| – `in_degree` recompute | 22.4 s |
+| – reference scan | 17.1 s |
+| – derived edge insert | 4.8 s |
+| – load, scopes, cross edges, delete | 1.6 s |
+| longest event-loop stall | 25.8 s (one run) |
+
+Two findings made most of the difference, and neither is about JavaScript:
+
+1. **The FTS update trigger had no column list.** `codegraph_nodes_fts_update`
+   fired on any `UPDATE`, so recomputing `in_degree` (not indexed) deleted and
+   re-inserted every node's whole body in the trigram index: all 22.4 s of the
+   `in_degree` step, and about a third of the database file. Migration
+   `20261105000200_fts_update_indexed_columns` scopes it to
+   `UPDATE OF name, signature, code`. In a replay the step dropped from 24.6 s to 1.2 s and the file from 347 MB to 233 MB.
+   The recompute also ran as one unbroken stretch on the thread that serves the
+   host's API, which is the 25.8 s stall.
+2. **SQLite's defaults are sized for small writes.** The 2 MB page cache spilled
+   mid-transaction, and the 1,000-page WAL threshold checkpointed (and synced)
+   every few commits, on top of an explicit `wal_checkpoint(PASSIVE)` every 250
+   files. A full build now sets `cache_size` to 16 MB and `wal_autocheckpoint` to
+   25,600 pages on its connection, then truncates the WAL and restores SQLite's
+   defaults when it ends (`Effect.acquireUseRelease`, so also on failure and
+   cancel). Both are per-connection, so a crash leaves nothing to undo. The
+   periodic passive checkpoint in the full-build drain is gone; the incremental
+   path keeps it.
+
+Plus three smaller changes:
+
+- **Reference scan:** the scope maps (same-file, imported, peer) are built once
+  per file instead of once per node, and the `Ns.member` receiver check is one
+  regex pass per node instead of a `new RegExp` per identifier. That took it from 17.1 s to 3.8 s.
+- **No long stretches:** derived edges are inserted in 2,000-row transactions
+  and `in_degree` is recomputed in 900-node chunks, each giving the event loop a
+  turn when the thread budget is spent; the drain also yields after a flush.
+- **Persist batch 25 → 10 files.** With the larger WAL threshold, commits are
+  cheap, so the batch is sized for how long one flush holds the thread. Over
+  three runs each, 10 cut the total stalled time from 44 s to 19 s (89 vs 220
+  stalls over 100 ms) for a wall difference inside the noise (59.1 vs 57.5 s).
+
+### Before and after
+
+Interleaved base / new / base / new… over one window, so both see the same
+machine state. The laptop was **on battery** for this window, which is why the
+base is slower than the AC baseline above; the ratio is the comparable number.
+Median of three each:
+
+| | base | new |
+| --- | --- | --- |
+| **wall** | **108.5 s** (108.5 / 114.0 / 97.9) | **43.9 s** (51.0 / 43.9 / 42.6) |
+| SQLite writes | 51.2 s | 28.7 s |
+| derived edges | 53.7 s | 11.3 s |
+| longest event-loop stall | 33.4 s | 0.8 s |
+| stalls over 1 s | 4 | 0 |
+| total time in stalls over 100 ms | 89.3 s | 11.0 s |
+| peak RSS | 381 MB | 411 MB |
+
+**60% less wall time; the longest stall goes from 33 s to under 1 s.** The
+remaining derived-edge time is reference scan 3.8 s, insert 3.7 s, `in_degree` 1.8 s.
+A single AC-power run of the new code, at batch size 25, took 36.4 s. Peak RSS is within
+run-to-run spread (353–416 MB across new runs).
+
+A first attempt at this A/B is discarded: the lid closed and the machine sat in
+Modern Standby for 14 minutes inside one run (908 s wall, a 789 s "stall").
+
+**Graph unchanged.** `native/bench/graph-fingerprint.ts` builds the tree and
+writes every file, node (kind, name, lines, entrypoint, `in_degree`, signature
+and code hashes), edge, service tag and an FTS probe as sorted text, with file
+ids replaced by paths. The baseline was deterministic (two builds, same SHA-1),
+and the new code produces the identical file: 44,307 nodes, 96,526 edges, 134
+tags, SHA-1 `dbc14bffa187e38c96603c8b3b39005e4ef3fec0`. `parity-real.ts` still
+shows the one documented difference (`Prompt` end line) and nothing else: 44,306 nodes and 82,108 edges on each side.
+
+**Rebuild over an existing database** (`BANYANCODE_PROFILE_REBUILD=1`, one run
+each): 172.2 s → 83.0 s, longest stall 38.3 s → 1.3 s. This pair overlapped a
+full index of another tree on the same machine, so treat it as indicative; an
+earlier AC-power pair was 133.9 s for base and 101.1 s for new at batch 25.
+
+### Measured and not adopted
+
+From a replay harness that writes a built graph into a fresh database under
+each variant (no parsing, single runs, ±20% noise):
+
+| variant | effect | why not |
+| --- | --- | --- |
+| prepared single-row statements reused | none (multi-row inserts were already amortised) | no gain |
+| `foreign_keys = OFF` | within noise | `DELETE FROM codegraph_files` relies on the cascade; connection-wide, so it would also drop enforcement for every other writer |
+| drop secondary indexes, recreate after | −3.5 s | DDL on a live database: readers lose the indexes for the length of the build |
+| drop FTS triggers, one `rebuild` after | −6.5 s | the rebuild is a single 9–12 s statement that blocks the thread and holds the write lock past other processes' 5 s `busy_timeout`; a crash would leave the triggers off |
+| FTS `automerge = 0` / `crisismerge = 64` + `optimize` | within noise | no gain |
+| 100- or 500-file transactions | within noise | longer stalls, more memory |
+| `temp_store = MEMORY` | within noise | no gain |
+| 64 / 128 MB page cache | same wall as 16 MB | +20 / +120 MB RSS |
+
+Ablation on real builds (single runs, new code otherwise): the default 2 MB cache
+gives 54.6 s and the default WAL threshold 71.1 s, against 36.4 s with both.
+
+Moving edge resolution into SQL or the sidecar was not needed: after the changes
+above the JavaScript part of it is under 5 s.
+
+### What is left
+
+- **Trigram FTS is now most of the write phase.** The replay puts about 16 s of
+  the remaining writes in FTS maintenance. Taking it off the API thread needs
+  either a worker with its own connection, or a chunked backfill with a
+  crash-safe "FTS dirty" marker. Both change who writes and when, so they were
+  out of scope here.
+- **A rebuild over an existing graph pays FTS twice**: every replaced node is
+  re-tokenized for the `delete` as well as the insert.
+- **Flush stalls**: a 10-file flush still holds the thread for up to ~0.8 s
+  on the largest files. Splitting a single large file's graph across
+  transactions would break per-file atomicity.
 
 Fixture parity was not enough. The first sidecar passed every fixture and
 panicked on this repository within seconds, and the fallback hid it: "native"
