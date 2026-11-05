@@ -38,6 +38,8 @@ pub const DEFAULT_IGNORED: &[&str] = &[
     ".banyancode",
     ".bun",
     ".bun-cache",
+    ".worktrees",
+    ".claude/worktrees",
     "*.db",
     "*.db-wal",
     "*.db-shm",

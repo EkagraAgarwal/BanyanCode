@@ -145,9 +145,11 @@ describe("native indexer fallback", () => {
     // all three files indexed and the backend recorded as the fallback.
     expect(run.backend).toBe("typescript")
     expect(run.indexed).toBe(3)
-    // The fake delivered `a.ts` with no symbol nodes; `b.ts` and `c.ts` were
-    // re-indexed by the TypeScript parser after the bad line.
-    expect(run.nodes).toEqual(["file:a.ts:1", "file:b.ts:1", "file:c.ts:1", "function:beta:1", "function:gamma:1"])
+    // The fake delivered the first requested file with no symbol nodes and the other two
+    // were re-indexed by the TypeScript parser. Which file comes first follows the walk
+    // order, which differs between Windows and Linux.
+    expect(run.nodes.filter((node) => node.startsWith("file:"))).toEqual(["file:a.ts:1", "file:b.ts:1", "file:c.ts:1"])
+    expect(run.nodes.filter((node) => node.startsWith("function:"))).toHaveLength(2)
   }, 180_000)
 
   test("a crash mid-stream does not kill the build", async () => {

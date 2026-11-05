@@ -232,6 +232,68 @@ describe("codegraph skip buckets", () => {
       )
     })
   })
+
+  test("linked worktrees and .git/info/exclude paths stay out of the graph", async () => {
+    await withTemp(async (directory) => {
+      await write(directory, "src/kept.ts", "export function kept() { return 1 }\n")
+      // A user's repo had 6,811 of 12,436 indexed files under .claude/worktrees.
+      await write(directory, ".claude/worktrees/copy/src/kept.ts", "export function kept() { return 1 }\n")
+      await write(directory, ".worktrees/copy/src/kept.ts", "export function kept() { return 1 }\n")
+      await write(directory, "private/local.ts", "export function local() { return 1 }\n")
+      await write(directory, ".git/info/exclude", "# local only\nprivate/\n")
+      await withServices(directory, ({ repo, indexer }) =>
+        Effect.gen(function* () {
+          yield* indexer.index({ root: directory, force: true })
+          const files = (yield* repo.listAllFiles()).map((f) => f.path.replace(/\\/g, "/").slice(directory.length + 1))
+          expect(files).toEqual(["src/kept.ts"])
+        }),
+      )
+    })
+  })
+})
+
+describe("codegraph link phase", () => {
+  test("a build reports a linking phase while edges resolve", async () => {
+    await withTemp(async (directory) => {
+      await write(directory, "src/a.ts", 'import { b } from "./b"\nexport function a() { return b() }\n')
+      await write(directory, "src/b.ts", "export function b() { return 1 }\n")
+      await withServices(directory, ({ indexer }) =>
+        Effect.gen(function* () {
+          const phases: Array<string | undefined> = []
+          yield* indexer.index({
+            root: directory,
+            force: true,
+            onProgress: (info) => Effect.sync(() => void phases.push(info.phase)),
+          })
+          // Files report first, then the link phase, so a long link phase is not read as stuck.
+          expect(phases.at(-1)).toBe("linking")
+          expect(phases.filter((phase) => phase === undefined).length).toBeGreaterThan(0)
+        }),
+      )
+    })
+  })
+
+  test("the search trigger skips in-degree updates, and a rename still reaches the index", async () => {
+    await withTemp(async (directory) => {
+      await write(directory, "src/a.ts", "export function uniqueAlphaName() { return 1 }\n")
+      await withServices(directory, ({ storage, indexer }) =>
+        Effect.gen(function* () {
+          yield* indexer.index({ root: directory, force: true })
+          // A trigger on every column re-indexed each node's code when only in_degree changed:
+          // 42s of an 83s main-thread block on a 100k-node graph.
+          const trigger = yield* storage.query<{ sql: string }>(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'codegraph_nodes_fts_update'",
+          )
+          expect(trigger[0]!.sql).toContain("UPDATE OF name, signature, code")
+          yield* storage.exec("UPDATE codegraph_nodes SET name = 'renamedBetaName' WHERE name = 'uniqueAlphaName'")
+          const hits = yield* storage.query<{ n: number }>(
+            "SELECT COUNT(*) AS n FROM codegraph_nodes_fts WHERE codegraph_nodes_fts MATCH 'renamedBetaName'",
+          )
+          expect(hits[0]!.n).toBe(1)
+        }),
+      )
+    })
+  })
 })
 
 describe("codegraph parse errors", () => {

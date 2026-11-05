@@ -1,6 +1,6 @@
 export * as CodegraphIndexer from "./codegraph-indexer"
 
-import { Cause, Effect, Queue, Ref, Schema } from "effect"
+import { Cause, Effect, Fiber, Queue, Ref, Schema } from "effect"
 import { createHash, randomUUID } from "node:crypto"
 import path from "path"
 import type { Storage } from "../storage/index.js"
@@ -70,7 +70,7 @@ export interface Interface {
     force?: boolean
     maxFileSizeBytes?: number
     excludePatterns?: readonly string[]
-    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string; phase?: "linking" }) => Effect.Effect<void>
   }) => Effect.Effect<
     {
       indexed: number
@@ -119,7 +119,7 @@ export interface Interface {
     force?: boolean
     maxFileSizeBytes?: number
     excludePatterns?: readonly string[]
-    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string; phase?: "linking" }) => Effect.Effect<void>
   }) => Effect.Effect<{
     indexed: number
     removed: number
@@ -132,7 +132,7 @@ export interface Interface {
     force?: boolean
     maxFileSizeBytes?: number
     excludePatterns?: readonly string[]
-    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string; phase?: "linking" }) => Effect.Effect<void>
   }) => Effect.Effect<{
     indexed: number
     skipped: number
@@ -296,6 +296,10 @@ const DEFAULT_IGNORED = [
   ".banyancode",
   ".bun",
   ".bun-cache",
+  // Linked git worktrees are whole copies of the repo, which more than doubles a
+  // build and fills search results with duplicates of every symbol.
+  ".worktrees",
+  ".claude/worktrees",
   // BanyanCode runtime artifacts left at a workspace root. A *.db is the
   // indexer's own DB (codegraph.sql.ts, memory.sql.ts, subagent-*.sql.ts);
   // *.db-wal / *.db-shm are SQLite sidecars. Always exclude — they are
@@ -373,6 +377,13 @@ export const make = (
               if (pattern) rootGit.push(pattern)
             }
           }
+        }
+        // Same rules as .gitignore, but private to this clone. In a linked worktree `.git`
+        // is a file, so this path simply does not exist.
+        const excludePath = path.join(root, ".git", "info", "exclude")
+        if (yield* fs.existsSafe(excludePath)) {
+          const content = yield* fs.readFileStringSafe(excludePath).pipe(Effect.orDie)
+          if (content) rootGit.push(...content.split("\n").flatMap((line) => compileIgnorePattern(line, root) ?? []))
         }
         const banyan: IgnorePattern[] = []
         const banyancodeIgnorePath = path.join(root, ".banyancode", "ignore")
@@ -842,7 +853,7 @@ const indexCandidateFileCore = (
       root: string
       force?: boolean
       maxFileSizeBytes?: number
-      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string; phase?: "linking" }) => Effect.Effect<void>
     }
     maxFileSizeBytes: number
     total: number
@@ -1617,7 +1628,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       force?: boolean
       maxFileSizeBytes?: number
       excludePatterns?: readonly string[]
-      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string; phase?: "linking" }) => Effect.Effect<void>
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
@@ -2002,7 +2013,19 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
             }
           : undefined
         const edgeStart = performance.now()
-        yield* rebuildDerivedGraph(undefined, undefined, parserState)
+        // Edge resolution reports no files, so without this a long link phase reads as a
+        // stuck build. The beat comes from this thread, so a blocked thread still goes quiet.
+        const onProgress = input.onProgress
+        const linkBeat = onProgress
+          ? yield* Effect.forkChild(
+              Effect.forever(
+                onProgress({ file: "", done: total, total, phase: "linking" }).pipe(Effect.andThen(Effect.sleep("5 seconds"))),
+              ),
+            )
+          : undefined
+        yield* rebuildDerivedGraph(undefined, undefined, parserState).pipe(
+          Effect.ensuring(linkBeat ? Fiber.interrupt(linkBeat) : Effect.void),
+        )
         if (profile.enabled) profile.edgeResolveMs += performance.now() - edgeStart
       }
       yield* Ref.get(skippedRef)
@@ -2110,7 +2133,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       force?: boolean
       maxFileSizeBytes?: number
       excludePatterns?: readonly string[]
-      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string; phase?: "linking" }) => Effect.Effect<void>
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
@@ -2448,7 +2471,7 @@ const drainParsedQueue = Effect.gen(function* () {
       force?: boolean
       maxFileSizeBytes?: number
       excludePatterns?: readonly string[]
-      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string; phase?: "linking" }) => Effect.Effect<void>
     }) {
       const result = yield* applyChanges({
         root: input.root,

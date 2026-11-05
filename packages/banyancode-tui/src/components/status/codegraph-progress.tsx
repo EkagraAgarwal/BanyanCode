@@ -155,7 +155,10 @@ export function CodegraphProgress(props: {
               </text>
             </Show>
           </box>
-          <Show when={status() === "running" && build()?.currentFile}>
+          <Show when={status() === "running" && build()?.phase === "linking"}>
+            <text fg={theme().muted} wrapMode="none">Linking symbols…</text>
+          </Show>
+          <Show when={status() === "running" && build()?.phase !== "linking" && build()?.currentFile}>
             {(file) => <text fg={theme().muted} wrapMode="none">Indexing: {file()}</text>}
           </Show>
           <Show when={status() === "stuck" && build()?.lastCompletedFile}>

@@ -350,6 +350,13 @@ export function createLive(context: Context): Live {
     if (next.status === "completed" || next.status === "failed" || next.status === "cancelled") invalidateGraph()
   })
   disposers.push(onBuild)
+  // A build event lost across a server restart would leave a dead build "running" forever,
+  // so a quiet build is re-read from the server until it moves again.
+  const quietBuildPoll = setInterval(() => {
+    const current = build()
+    if (current?.status === "running" && Date.now() - (current.lastProgressAt ?? 0) > 30_000) void refreshCodegraph()
+  }, 15_000)
+  disposers.push(() => clearInterval(quietBuildPoll))
 
   const onAutoUpdate = rpc.codegraph.events.on("autoUpdate", (event) => {
     setAutoUpdate(event.data)

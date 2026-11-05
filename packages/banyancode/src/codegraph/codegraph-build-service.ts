@@ -11,7 +11,7 @@ export const State = Schema.Struct({
   // The walk has to enumerate the tree before the first progress callback, so
   // `done`/`total` stay 0/0 for a while on a large project. The phase lets a
   // status reader say "enumerating" instead of showing a stuck 0/0.
-  phase: Schema.optional(Schema.Literals(["enumerating", "indexing"])),
+  phase: Schema.optional(Schema.Literals(["enumerating", "indexing", "linking"])),
   root: Schema.optional(Schema.String),
   // Phase 7 follow-up: the canonical banyan dir + DB path are always
   // derived from the root, never from `dbPath` in the request. `dbPath`
@@ -224,7 +224,13 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
             root: identity.root,
             force,
             ...(input.excludePatterns ? { excludePatterns: input.excludePatterns } : {}),
-            onProgress: Effect.fn("CodegraphBuildService.onProgress")(function* ({ file, done, total, currentFile }) {
+            onProgress: Effect.fn("CodegraphBuildService.onProgress")(function* ({ file, done, total, currentFile, phase }) {
+              if (phase === "linking") {
+                const linking: State = { ...(yield* Ref.get(state)), phase, done, total, lastProgressAt: Date.now(), currentlyParsing: undefined }
+                yield* Ref.set(state, linking)
+                yield* emit(linking)
+                return
+              }
               const basename = file.split("/").pop() ?? file.split("\\").pop() ?? file
               const next: State = {
                 ...initial,
