@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Interface as CodegraphRepo } from "../../src/codegraph/codegraph-repo.js"
 import { make as makeRepo } from "../../src/codegraph/codegraph-repo.js"
-import { make as makeQuery } from "../../src/integration/codegraph-query.js"
+import { make as makeProbe } from "../../src/integration/gateway-probe.js"
 import { make as makePort } from "../../src/integration/codegraph-port.js"
 import { Storage } from "../../src/storage/index.js"
 
@@ -151,99 +151,54 @@ describe("codegraph port over the real repository", () => {
   })
 })
 
-describe("codegraph gateway query over the real repository", () => {
-  test("rewrites graph-backed operations and renders an augment header", async () => {
+describe("gateway probe over the real repository", () => {
+  test("answers from indexed rows: symbols, glob matches, file facts", async () => {
     const result = await Effect.runPromise(
       withRepo((repo, storage) =>
         Effect.gen(function* () {
           yield* seed(repo, storage)
-          const query = makeQuery(repo)
+          const probe = makeProbe(repo, { storage })
           return {
-            symbol: yield* query.route!({
-              operation: { kind: "symbol", query: "Helper" },
-              call: { tool: "grep", input: {} },
-              sessionID: "s1",
-            }),
-            callers: yield* query.route!({
-              operation: { kind: "relationship", relation: "callers", target: "Helper" },
-              call: { tool: "grep", input: {} },
-              sessionID: "s1",
-            }),
-            dependents: yield* query.route!({
-              operation: { kind: "relationship", relation: "dependents", target: "Helper" },
-              call: { tool: "grep", input: {} },
-              sessionID: "s1",
-            }),
-            architecture: yield* query.route!({
-              operation: { kind: "architecture", query: "Helper" },
-              call: { tool: "grep", input: {} },
-              sessionID: "s1",
-            }),
-            text: yield* query.route!({
-              operation: { kind: "text_search", pattern: "Helper" },
-              call: { tool: "grep", input: {} },
-              sessionID: "s1",
-            }),
-            header: yield* query.augmentRead!({ path: "src/a.ts", sessionID: "s1" }),
-            missing: yield* query.augmentRead!({ path: "src/nope.ts", sessionID: "s1" }),
+            symbol: yield* probe.probe({ tool: "grep", arguments: { pattern: "Helper" }, root: "/workspace" }),
+            missingSymbol: yield* probe.probe({ tool: "grep", arguments: { pattern: "Nowhere" }, root: "/workspace" }),
+            dotted: yield* probe.probe({ tool: "grep", arguments: { pattern: "Helper.run" }, root: "/workspace" }),
+            glob: yield* probe.probe({ tool: "glob", arguments: { pattern: "**/*.ts" }, root: "/workspace" }),
+            globMiss: yield* probe.probe({ tool: "glob", arguments: { pattern: "**/*.json" }, root: "/workspace" }),
+            read: yield* probe.probe({ tool: "read", arguments: { path: "src/a.ts" }, root: "/workspace" }),
+            unindexed: yield* probe.probe({ tool: "read", arguments: { path: "src/nope.ts" }, root: "/workspace" }),
+            header: yield* probe.augmentRead!({ path: "src/a.ts", sessionID: "s1" }),
+            missingHeader: yield* probe.augmentRead!({ path: "src/nope.ts", sessionID: "s1" }),
           }
         }),
       ),
     )
 
-    expect(result.symbol).toEqual({
-      tool: "code_find",
-      input: { intent: "definition", target: "Helper", includeKeywordFallback: true },
-    })
-    expect(result.callers).toMatchObject({ tool: "codegraph_callers", input: { function: "Helper" } })
-    expect(result.dependents).toMatchObject({ tool: "codegraph_dependents", input: { function: "Helper" } })
-    expect(result.architecture).toEqual({ tool: "repository_explain", input: { symbol: "Helper" } })
-    expect(result.text).toBeUndefined()
+    expect(result.symbol).toMatchObject({ graphBuilt: true, symbolHits: 1 })
+    expect(result.missingSymbol.symbolHits).toBe(0)
+    expect(result.dotted.symbolHits).toBe(1)
+    expect(result.glob.matchCount).toBe(1)
+    expect(result.globMiss.matchCount).toBe(0)
+    expect(result.read).toMatchObject({ graphBuilt: true, indexed: true, bytes: 10 })
+    // The seeded hash has no file on disk, so the probe reports drift.
+    expect(result.read.fileStale).toBe(true)
+    expect(result.unindexed).toMatchObject({ indexed: false })
     expect(result.header).toBe("Symbol: Helper | Imports: 1 | References: 1 | Callers: 1 | Dependents: 1")
-    expect(result.missing).toBeUndefined()
+    expect(result.missingHeader).toBeUndefined()
   })
 
-  test("does not rewrite onto tools that were not registered", async () => {
-    const result = await Effect.runPromise(
-      withRepo((repo, storage) =>
-        Effect.gen(function* () {
-          yield* seed(repo, storage)
-          const query = makeQuery(repo, { availableTools: new Set(["code_find"]) })
-          return {
-            symbol: yield* query.route!({
-              operation: { kind: "symbol", query: "Helper" },
-              call: { tool: "grep", input: {} },
-              sessionID: "s1",
-            }),
-            callers: yield* query.route!({
-              operation: { kind: "relationship", relation: "callers", target: "Helper" },
-              call: { tool: "grep", input: {} },
-              sessionID: "s1",
-            }),
-          }
-        }),
-      ),
-    )
-    expect(result.symbol).toEqual({
-      tool: "code_find",
-      input: { intent: "definition", target: "Helper", includeKeywordFallback: true },
-    })
-    expect(result.callers).toBeUndefined()
-  })
-
-  test("fails closed to direct when the graph has no meta row", async () => {
+  test("an unbuilt graph is unprobed, which always falls back", async () => {
     const result = await Effect.runPromise(
       withRepo((repo) =>
         Effect.gen(function* () {
-          const query = makeQuery(repo)
-          return yield* query.route!({
-            operation: { kind: "symbol", query: "Helper" },
-            call: { tool: "grep", input: {} },
-            sessionID: "s1",
-          })
+          const probe = makeProbe(repo)
+          return {
+            grep: yield* probe.probe({ tool: "grep", arguments: { pattern: "Helper" }, root: "/workspace" }),
+            read: yield* probe.probe({ tool: "read", arguments: { path: "src/a.ts" }, root: "/workspace" }),
+          }
         }),
       ),
     )
-    expect(result).toBeUndefined()
+    expect(result.grep).toEqual({ graphBuilt: false, stale: true })
+    expect(result.read).toEqual({ graphBuilt: false, stale: true })
   })
 })

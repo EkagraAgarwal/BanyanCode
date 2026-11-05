@@ -4,10 +4,7 @@
  * `register(ctx, deps)` is the single entry point the plugin's `server.ts`
  * calls. It owns every registration the workstream needs:
  *
- *   - tools   → `ctx.tool.transform` (exact v1 IDs: codegraph_build, code_find,
- *               codegraph_staleness, codegraph_search, codegraph_query,
- *               codegraph_impact, codegraph_dependents, codegraph_callers,
- *               codegraph_remove, codegraph_find_*)
+ *   - tools   → `ctx.tool.transform` (`codegraph`: status/build/remove/staleness)
  *   - RPC     → `ctx.rpc.register(Definition)` with id `banyancode.codegraph`
  *               (methods + `rpc.banyancode.codegraph.*` events)
  *   - commands→ `ctx.command.transform` (`/codegraph-build`, `-cancel`,
@@ -42,26 +39,7 @@ import { Definition } from "./rpc.js"
 import { makeService } from "./search/search.js"
 import { make as makeStructural } from "./structural-queries/structural-queries.js"
 import { policySystemParts, type ToolGuideInput } from "./system-policy.js"
-import { name as codeFindName, tool as codeFindTool } from "./tools/code-find.js"
-import {
-  name_build,
-  name_callers,
-  name_dependents,
-  name_impact,
-  name_query,
-  name_remove,
-  tools as codegraphTools,
-} from "./tools/codegraph.js"
-import { name as stalenessName, tool as stalenessTool } from "./tools/codegraph-staleness.js"
-import { name as searchName, tool as searchTool } from "./tools/codegraph-search-tool.js"
-import {
-  name_find_async,
-  name_find_http_routes,
-  name_find_implementations,
-  name_find_overrides,
-  name_find_recursive,
-  tools as structuralTools,
-} from "./tools/structural-queries-tool.js"
+import { name as codegraphName, tool as codegraphTool } from "./tools/codegraph.js"
 
 export * as CodegraphRpc from "./rpc.js"
 export { Definition as CodegraphRpcDefinition } from "./rpc.js"
@@ -77,22 +55,7 @@ export interface RegisterDeps {
 }
 
 /** Every tool id this workstream registers, in registration order. */
-export const TOOL_IDS = [
-  name_build,
-  name_query,
-  name_impact,
-  name_dependents,
-  name_callers,
-  name_remove,
-  codeFindName,
-  stalenessName,
-  searchName,
-  name_find_implementations,
-  name_find_overrides,
-  name_find_recursive,
-  name_find_async,
-  name_find_http_routes,
-] as const
+export const TOOL_IDS = [codegraphName] as const
 
 export interface Services {
   readonly projectRoot: string
@@ -180,7 +143,7 @@ export const register = (
     // (tools, RPC, watcher, bootstrap). The plugin still loads.
     if (process.env.BANYANCODE_ENABLE === "0") return
 
-    const { repo, buildService, autoUpdate, readiness, bootstrap, analyzer, search, structural, projectRoot } =
+    const { repo, buildService, autoUpdate, readiness, bootstrap, projectRoot } =
       deps.services ?? (yield* makeServices(ctx, deps))
 
     const excludePatterns = () =>
@@ -353,19 +316,17 @@ export const register = (
     }
 
     // ── tools ──────────────────────────────────────────────────────────────
-    const toolDeps = {
-      repo,
-      analyzer,
-      buildService,
-      projectRoot: () => projectRoot,
-      excludePatterns,
-    }
     const registered = [
-      ...codegraphTools(toolDeps),
-      codeFindTool({ repo, analyzer, readiness, projectRoot: () => projectRoot }),
-      stalenessTool({ repo, projectRoot: () => projectRoot }),
-      searchTool({ repo, search, structural }),
-      ...structuralTools({ structural }),
+      codegraphTool({
+        repo,
+        buildService,
+        readiness,
+        autoUpdate,
+        projectRoot: () => projectRoot,
+        excludePatterns,
+        databasePath: () => deps.storage.path,
+        schemaVersion: () => deps.storage.schemaVersion,
+      }),
     ] as ReadonlyArray<ToolSchema.Info>
 
     yield* ctx.tool

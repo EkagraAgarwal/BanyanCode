@@ -2,6 +2,7 @@ import type { Context } from "@opencode/plugin/effect/plugin"
 import { Effect, type Scope } from "effect"
 import type { Interface as ConfigInterface } from "../config/service.js"
 import type { Interface as StorageInterface } from "../storage/service.js"
+import type { CodeFindGraph } from "./code-find.js"
 import type { CodegraphPort } from "./codegraph-port.js"
 import { registerCommands } from "./commands.js"
 import { makeEditPlanner } from "./edit-planner.js"
@@ -13,15 +14,18 @@ import { buildTools, NAMES } from "./tools.js"
  * Workstream 3c entry point (repository intelligence + change check).
  *
  * `deps.codegraph` is the only graph dependency; the lead binds it to the
- * codegraph service from workstream 3a. `storage` and `config` are part of the
- * shared plugin dependency bag (and used by the verify twin); intel itself
- * persists nothing and reads no config yet.
+ * codegraph service from workstream 3a. `deps.graph` carries the codegraph
+ * search and structural services used by `code_find`'s search /
+ * implementations / overrides intents. `storage` and `config` are part of the
+ * shared plugin dependency bag; intel itself persists nothing and reads no
+ * config yet.
  */
 
 export interface IntelDeps {
   readonly storage: StorageInterface
   readonly config: ConfigInterface
   readonly codegraph: CodegraphPort
+  readonly graph?: CodeFindGraph
   /** Builds the graph first when it is missing or empty, as the repository tools promise. */
   readonly ensureGraph?: () => Effect.Effect<unknown>
 }
@@ -34,7 +38,7 @@ export const register = (ctx: Context, deps: IntelDeps): Effect.Effect<void, nev
     const intel = make(deps.codegraph, { cwd: projectRoot })
     const planner = makeEditPlanner(deps.codegraph)
     const ensureGraph = deps.ensureGraph
-    const tools = buildTools({ ctx, port: deps.codegraph, intel }).map((tool) =>
+    const tools = buildTools({ ctx, port: deps.codegraph, intel, ...(deps.graph ? { graph: deps.graph } : {}) }).map((tool) =>
       ensureGraph === undefined
         ? tool
         : {
@@ -57,7 +61,7 @@ export const register = (ctx: Context, deps: IntelDeps): Effect.Effect<void, nev
       .pipe(Effect.orDie)
 
     yield* ctx.rpc
-      .register(Definition, handlers({ port: deps.codegraph, intel, planner }))
+      .register(Definition, handlers({ port: deps.codegraph, intel, planner, ...(deps.graph ? { graph: deps.graph } : {}) }))
       .pipe(Effect.orDie)
 
     // `/repository-*` slash commands (v1 command templates).

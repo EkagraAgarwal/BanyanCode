@@ -35,7 +35,7 @@ export function orchestrationText(maxSubagents: number): string {
     "### Graph readiness is a precondition for delegation",
     "",
     "Ensure the code graph is usable BEFORE fanning out exploration: run one",
-    "repository tool call (`repository_query` or `codegraph_staleness`)",
+    "repository tool call (`repo op=query` or `codegraph op=staleness`)",
     "yourself — the first call auto-builds a missing graph. Do NOT dispatch",
     "exploration subagents whose first act is a grep/glob search while the",
     "graph is absent; subagents get better answers from repository tools than",

@@ -1,6 +1,4 @@
 import { Effect } from "effect"
-import type { CodegraphEdge, CodegraphEdgeKind, CodegraphNode } from "./types.js"
-import type { Interface as CodegraphRepoInterface } from "./codegraph-repo.js"
 
 // Plan Phase 3: one internal BFS primitive parameterized by direction,
 // edge kinds, depth, and result limit. It swaps the current and next
@@ -8,13 +6,29 @@ import type { Interface as CodegraphRepoInterface } from "./codegraph-repo.js"
 // expanded with batched edge queries instead of one query per node. A node
 // is marked visited at enqueue time so diamond-shaped graphs return each node
 // exactly once.
+//
+// Generic over the row shape so both graph views share one algorithm:
+// `CodegraphRepo` rows (`CodegraphNode`/`CodegraphEdge`) and the read-only
+// `CodegraphPort` projection (`GraphNode`/`GraphEdge`). The two shapes are
+// structurally identical; only the pre-existing type names differ.
 
 export type BfsDirection = "outgoing" | "incoming" | "both"
 
-export interface BfsOptions {
+export interface BfsNode {
+  readonly id: string
+}
+
+export interface BfsEdge {
+  readonly id: string
+  readonly fromNodeID: string
+  readonly toNodeID: string
+  readonly kind: string
+}
+
+export interface BfsOptions<K extends string = string> {
   readonly start: ReadonlyArray<string>
   readonly direction: BfsDirection
-  readonly edgeKinds: ReadonlySet<CodegraphEdgeKind>
+  readonly edgeKinds: ReadonlySet<K>
   /**
    * Optional per-direction edge-kind allowlist. When present, overrides
    * `edgeKinds` for the given direction. Lets `findRelatedWithDepth`
@@ -22,43 +36,45 @@ export interface BfsOptions {
    * `calls/references` incoming — the test invariant the existing
    * directional traversal relies on.
    */
-  readonly outgoingEdgeKinds?: ReadonlySet<CodegraphEdgeKind>
-  readonly incomingEdgeKinds?: ReadonlySet<CodegraphEdgeKind>
+  readonly outgoingEdgeKinds?: ReadonlySet<K>
+  readonly incomingEdgeKinds?: ReadonlySet<K>
   readonly maxDepth: number
   readonly resultLimit?: number
 }
 
-export interface BfsTaggedResult {
-  readonly node: CodegraphNode
+export interface BfsTaggedResult<N extends BfsNode = BfsNode> {
+  readonly node: N
   readonly depth: number
 }
 
-export interface BfsRun {
-  readonly results: ReadonlyArray<BfsTaggedResult>
-  readonly edges: ReadonlyArray<CodegraphEdge>
+export interface BfsRun<N extends BfsNode = BfsNode, E extends BfsEdge = BfsEdge> {
+  readonly results: ReadonlyArray<BfsTaggedResult<N>>
+  readonly edges: ReadonlyArray<E>
   readonly truncated: boolean
 }
 
-export type BfsRepo = Pick<
-  CodegraphRepoInterface,
-  "edgesFrom" | "edgesTo" | "edgesFromBatch" | "edgesToBatch" | "nodesByIDs"
->
+/** The batched reads BFS needs; both graph repositories satisfy it. */
+export interface BfsGraph<N extends BfsNode, E extends BfsEdge> {
+  readonly edgesFromBatch: (nodeIDs: string[]) => Effect.Effect<ReadonlyArray<E>, never, never>
+  readonly edgesToBatch: (nodeIDs: string[]) => Effect.Effect<ReadonlyArray<E>, never, never>
+  readonly nodesByIDs: (ids: string[]) => Effect.Effect<ReadonlyArray<N>, never, never>
+}
 
 // Run a single batched query for the whole frontier instead of one query
 // per node. For a 1,000-node frontier this collapses 1,000 queries into 2.
-const fetchFrontierEdges = (
-  repo: BfsRepo,
-  frontier: ReadonlyArray<string>,
+const fetchFrontierEdges = <N extends BfsNode, E extends BfsEdge>(
+  graph: BfsGraph<N, E>,
+  frontier: string[],
   direction: BfsDirection,
 ): Effect.Effect<
-  { readonly out: ReadonlyMap<string, ReadonlyArray<CodegraphEdge>>; readonly inc: ReadonlyMap<string, ReadonlyArray<CodegraphEdge>> },
+  { readonly out: ReadonlyMap<string, ReadonlyArray<E>>; readonly inc: ReadonlyMap<string, ReadonlyArray<E>> },
   never,
   never
 > =>
   Effect.gen(function* () {
     const empty = {
-      out: new Map<string, ReadonlyArray<CodegraphEdge>>(),
-      inc: new Map<string, ReadonlyArray<CodegraphEdge>>(),
+      out: new Map<string, ReadonlyArray<E>>(),
+      inc: new Map<string, ReadonlyArray<E>>(),
     }
     if (frontier.length === 0) return empty
 
@@ -68,37 +84,35 @@ const fetchFrontierEdges = (
     // Accumulate with push instead of `[...list, e]` array-spread per edge —
     // the spread reallocates the whole list for every edge, which is
     // quadratic on wide frontiers. Output order is identical.
-    const outEdgesByID = new Map<string, CodegraphEdge[]>()
+    const outEdgesByID = new Map<string, E[]>()
     if (wantOut) {
-      const edges = yield* repo.edgesFromBatch(frontier)
-      for (const e of edges) {
-        let list = outEdgesByID.get(e.fromNodeID)
+      for (const edge of yield* graph.edgesFromBatch(frontier)) {
+        let list = outEdgesByID.get(edge.fromNodeID)
         if (!list) {
           list = []
-          outEdgesByID.set(e.fromNodeID, list)
+          outEdgesByID.set(edge.fromNodeID, list)
         }
-        list.push(e)
+        list.push(edge)
       }
     }
-    const inEdgesByID = new Map<string, CodegraphEdge[]>()
+    const inEdgesByID = new Map<string, E[]>()
     if (wantIn) {
-      const edges = yield* repo.edgesToBatch(frontier)
-      for (const e of edges) {
-        let list = inEdgesByID.get(e.toNodeID)
+      for (const edge of yield* graph.edgesToBatch(frontier)) {
+        let list = inEdgesByID.get(edge.toNodeID)
         if (!list) {
           list = []
-          inEdgesByID.set(e.toNodeID, list)
+          inEdgesByID.set(edge.toNodeID, list)
         }
-        list.push(e)
+        list.push(edge)
       }
     }
     return { out: outEdgesByID, inc: inEdgesByID }
   })
 
-export const bfsPure = (
-  repo: BfsRepo,
-  options: BfsOptions,
-): Effect.Effect<BfsRun, never, never> =>
+export const bfsPure = <N extends BfsNode, E extends BfsEdge>(
+  graph: BfsGraph<N, E>,
+  options: BfsOptions<E["kind"] & string>,
+): Effect.Effect<BfsRun<N, E>, never, never> =>
   Effect.gen(function* () {
     const { start, direction, maxDepth } = options
     const outgoingKinds = options.outgoingEdgeKinds ?? options.edgeKinds
@@ -111,7 +125,7 @@ export const bfsPure = (
     const visited = new Set<string>(start)
     const depthOf = new Map<string, number>(start.map((id) => [id, 0]))
     const resultIDs: string[] = []
-    const edges: CodegraphEdge[] = []
+    const edges: E[] = []
     const seenEdges = new Set<string>()
     let truncated = false
 
@@ -122,10 +136,10 @@ export const bfsPure = (
       const nextDepth = currentDepth + 1
       if (nextDepth > maxDepth) break
 
-      const fetched = yield* fetchFrontierEdges(repo, frontier, direction)
+      const fetched = yield* fetchFrontierEdges(graph, frontier, direction)
       const nextFrontier: string[] = []
       for (const id of frontier) {
-        const candidates: Array<{ readonly edge: CodegraphEdge; readonly nextID: string; readonly kinds: ReadonlySet<CodegraphEdgeKind> }> = []
+        const candidates: Array<{ readonly edge: E; readonly nextID: string; readonly kinds: ReadonlySet<string> }> = []
         if (wantOut) {
           for (const edge of fetched.out.get(id) ?? []) candidates.push({ edge, nextID: edge.toNodeID, kinds: outgoingKinds })
         }
@@ -152,9 +166,9 @@ export const bfsPure = (
     }
 
     if (resultIDs.length > 0) {
-      const fetched = yield* repo.nodesByIDs(resultIDs)
-      const byID = new Map(fetched.map((n) => [n.id, n]))
-      const results: BfsTaggedResult[] = []
+      const fetched = yield* graph.nodesByIDs(resultIDs)
+      const byID = new Map(fetched.map((node) => [node.id, node]))
+      const results: BfsTaggedResult<N>[] = []
       for (const id of resultIDs) {
         const node = byID.get(id)
         if (!node) continue

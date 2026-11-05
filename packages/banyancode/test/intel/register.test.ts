@@ -5,6 +5,8 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { Effect } from "effect"
 import { register as registerIntel } from "../../src/intel/index.js"
+import { TOOL_IDS as CODEGRAPH_TOOL_IDS } from "../../src/codegraph/index.js"
+import { INTEL_TOOL_NAMES } from "../../src/intel/index.js"
 import { register as registerVerify } from "../../src/verify/index.js"
 import type { Interface as ConfigInterface } from "../../src/config/service.js"
 import type { Interface as StorageInterface } from "../../src/storage/service.js"
@@ -85,20 +87,7 @@ describe("workstream 3c registration", () => {
 
     expect(harness.namespaces).toEqual(["banyan"])
     expect(harness.tools.map((tool) => tool.name).sort()).toEqual(
-      [
-        "blast_radius",
-        "edit_plan",
-        "preflight",
-        "repository_explain",
-        "repository_impact",
-        "repository_ownership",
-        "repository_query",
-        "repository_relationships",
-        "repository_symbols",
-        "repository_tests",
-        "repository_trace",
-        "safe_rename",
-      ].sort(),
+      ["change_check", "code_find", "repo", "safe_rename"].sort(),
     )
     for (const tool of harness.tools) {
       expect(tool.description.length).toBeGreaterThan(40)
@@ -124,6 +113,18 @@ describe("workstream 3c registration", () => {
     expect(Object.keys(harness.rpc[0]?.handlers ?? {}).sort()).toEqual(
       Object.keys(harness.rpc[0]?.definition.methods ?? {}).sort(),
     )
+  })
+
+  test("the code tool surface is exactly five ids", () => {
+    // Intel registers its four; the codegraph workstream registers the index
+    // lifecycle tool. Nothing else may reach the model under this surface.
+    expect([...Object.values(INTEL_TOOL_NAMES), ...CODEGRAPH_TOOL_IDS].sort()).toEqual([
+      "change_check",
+      "code_find",
+      "codegraph",
+      "repo",
+      "safe_rename",
+    ])
   })
 
   test("verify registers the four tools and its RPC namespace", async () => {

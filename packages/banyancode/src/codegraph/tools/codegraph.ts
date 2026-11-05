@@ -1,59 +1,56 @@
 /**
- * `codegraph_build` / `codegraph_query` / `codegraph_impact` /
- * `codegraph_dependents` / `codegraph_callers` / `codegraph_remove`.
+ * `codegraph` — index lifecycle, status and drift for the code graph.
  *
- * Ported from v1 `packages/core/src/tool/codegraph.ts`. Tool IDs, parameter
- * names/descriptions and rendered text are unchanged; the v1 `Tool.make`
- * contract (`contract.visibility`, `toModelOutput`, `permission.assert`) maps
- * onto v2's `Tool.Info` (`options.permission`, `content` as model output).
+ * One id replaces the three per-operation graph tools (build, remove,
+ * staleness); `op` selects the operation. Each op still calls the service
+ * function the old tool called and renders the same model-facing text.
+ * `build` and `remove` change state, so the tool carries the `codegraph`
+ * permission action (the plan agent asks for it).
  */
 import { Tool } from "@opencode/schema/tool"
 import { Effect, Schema } from "effect"
-import type { Interface as CodegraphAnalyzerInterface } from "../codegraph-analyzer.js"
+import { existsSync } from "node:fs"
+import path from "node:path"
+import type { Interface as CodegraphAutoUpdateInterface } from "../codegraph-auto-update.js"
+import { State as BuildState } from "../codegraph-build-service.js"
 import type { Interface as CodegraphBuildServiceInterface } from "../codegraph-build-service.js"
+import type { Interface as CodegraphReadinessInterface } from "../codegraph-readiness.js"
+import { ReadinessResult } from "../codegraph-readiness.js"
 import type { Interface as CodegraphRepoInterface } from "../codegraph-repo.js"
-import { GraphMeta, type CodegraphNode } from "../types.js"
+import { GraphMeta } from "../types.js"
 import { resolveProjectRoot } from "../workspace-identity.js"
-import { formatNodes } from "./format.js"
-import { optionalBoolean, optionalNumber, optionalString } from "./schema.js"
+import { optionalBoolean, optionalString } from "./schema.js"
 
-export const name_build = "codegraph_build"
-export const name_remove = "codegraph_remove"
-export const name_query = "codegraph_query"
-export const name_impact = "codegraph_impact"
-export const name_dependents = "codegraph_dependents"
-export const name_callers = "codegraph_callers"
+export const name = "codegraph"
 
 export interface Deps {
   readonly repo: CodegraphRepoInterface
-  readonly analyzer: CodegraphAnalyzerInterface
   readonly buildService: CodegraphBuildServiceInterface
-  /** The open project's root; every tool default resolves here, never the host cwd. */
+  readonly readiness: CodegraphReadinessInterface
+  readonly autoUpdate: CodegraphAutoUpdateInterface
+  /** The open project's root; every op default resolves here, never the host cwd. */
   readonly projectRoot: () => string
   /** `banyancode_codegraph_exclude_patterns`, applied to an explicit build. */
   readonly excludePatterns?: () => Effect.Effect<readonly string[], never, never>
+  readonly databasePath?: () => string
+  readonly schemaVersion?: () => number
 }
 
-export const InputBuild = Schema.Struct({
+export const Input = Schema.Struct({
+  op: Schema.Literals(["status", "build", "remove", "staleness"]).annotate({
+    description:
+      "status reads build/readiness/watcher state; build indexes the workspace (force rebuids from scratch); remove clears the index; staleness reports drift from the working tree.",
+  }),
   root: optionalString.annotate({
-    description:
-      "Workspace root to scan. Defaults to the open project's root " +
-      "when omitted. A path outside the open project is refused.",
+    description: "Workspace root. Defaults to the open project's root; a path outside it is refused (build) or ignored (staleness).",
   }),
-  force: optionalBoolean.annotate({
-    description:
-      "When true, wipes any existing index for the workspace before " +
-      "rebuilding. Defaults to false (incremental). Set true after major " +
-      "source re-organizations or when the graph is suspected corrupt.",
+  force: optionalBoolean.annotate({ description: "Wipe the existing index before rebuilding (build). Defaults to false." }),
+  dropFile: optionalBoolean.annotate({
+    description: "Clear every table, VACUUM and truncate the WAL (remove). The database file itself is kept.",
   }),
-}).annotate({
-  description:
-    "Build (or rebuild) the code graph for the current workspace. " +
-    "Walks the file tree, parses with tree-sitter, and indexes symbols + " +
-    "edges into banyancode.db.",
 })
 
-export const OutputBuild = Schema.Struct({
+const BuildOutput = Schema.Struct({
   indexed: Schema.Number,
   skipped: Schema.Number,
   duration_ms: Schema.Number,
@@ -81,129 +78,44 @@ export const OutputBuild = Schema.Struct({
   meta: Schema.optional(GraphMeta),
 })
 
-export const InputQuery = Schema.Struct({
-  file: optionalString.annotate({
-    description: "Optional filename or path substring filter (e.g. 'memory-repo').",
-  }),
-  function: optionalString.annotate({
-    description:
-      "Optional symbol name filter (e.g. 'update'). Returns nodes whose " + "name contains this substring.",
-  }),
-  kind: optionalString.annotate({
-    description:
-      "Optional node-kind filter (e.g. 'function', 'class', 'method'). " + "Exact match against CodegraphNode.kind.",
-  }),
-  limit: optionalNumber.annotate({
-    description: "Maximum number of nodes to return. Defaults to 200 when omitted.",
-  }),
-}).annotate({
-  description:
-    "Raw codegraph query: list nodes matching the given filters. " +
-    "All filters are optional but at least one should be provided — " +
-    "an unfiltered query returns up to `limit` arbitrary nodes.",
-})
-
-export const OutputQuery = Schema.Struct({
-  nodes: Schema.Array(
-    Schema.Struct({
-      id: Schema.String,
-      fileID: Schema.String,
-      kind: Schema.String,
-      name: Schema.String,
-      signature: Schema.optional(Schema.String),
-      startLine: Schema.Number,
-      endLine: Schema.Number,
-      code: Schema.optional(Schema.String),
-    }),
-  ),
-  meta: Schema.optional(GraphMeta),
-})
-
-export const InputImpact = Schema.Struct({
-  nodeID: optionalString.annotate({
-    description:
-      "The graph UUID of the starting node. Provide nodeID OR function — " + "the tool will reject calls with neither.",
-  }),
-  function: optionalString.annotate({
-    description: "The symbol name to look up when nodeID is omitted " + "(e.g. 'MemoryRepo.update').",
-  }),
-  maxDepth: optionalNumber.annotate({
-    description: "Maximum traversal depth for transitive dependents. Defaults to 8 " + "when omitted.",
-  }),
-  limit: optionalNumber.annotate({
-    description: "Maximum number of result nodes to return. Defaults to 500.",
-  }),
-}).annotate({
-  description:
-    "Blast radius from a node: direct dependents and transitive dependents " + "in the code graph.",
-})
-
-export const OutputImpact = Schema.Struct({
-  dependents: Schema.Array(Schema.Unknown),
-  transitive: Schema.Array(Schema.Unknown),
-  meta: Schema.optional(GraphMeta),
-})
-
-export const InputDependents = Schema.Struct({
-  nodeID: optionalString.annotate({
-    description: "The graph UUID of the target node. Provide nodeID OR function.",
-  }),
-  function: optionalString.annotate({
-    description: "The symbol name to look up when nodeID is omitted.",
-  }),
-  limit: optionalNumber.annotate({
-    description: "Maximum number of dependents to return. Defaults to 500.",
-  }),
-}).annotate({
-  description: "Direct dependents of a node — symbols that import or reference it.",
-})
-
-export const OutputDependents = Schema.Struct({
-  dependents: Schema.Array(Schema.Unknown),
-  meta: Schema.optional(GraphMeta),
-})
-
-export const InputCallers = Schema.Struct({
-  nodeID: optionalString.annotate({
-    description: "The graph UUID of the target node. Provide nodeID OR function.",
-  }),
-  function: optionalString.annotate({
-    description: "The symbol name to look up when nodeID is omitted.",
-  }),
-  limit: optionalNumber.annotate({
-    description: "Maximum number of callers to return. Defaults to 500.",
-  }),
-}).annotate({
-  description: "Direct callers of a node — places that invoke the given symbol.",
-})
-
-export const OutputCallers = Schema.Struct({
-  callers: Schema.Array(Schema.Unknown),
-  meta: Schema.optional(GraphMeta),
-})
-
-export const InputRemove = Schema.Struct({
-  dropFile: optionalBoolean.annotate({
-    description:
-      "When true, clears every table, VACUUMs and truncates the WAL — the " +
-      "strongest reset available while the plugin holds the database open. " +
-      "The banyancode.db file itself is kept (SQLite must not unlink an open " +
-      "database); a build right after writes into the emptied file.",
-  }),
-}).annotate({
-  description:
-    "Remove the current codegraph index. Frees disk space but does not " +
-    "delete the banyancode.db file (the file is shared with sessions and memory).",
-})
-
-export const OutputRemove = Schema.Struct({
+const RemoveOutput = Schema.Struct({
   status: Schema.Literals(["removed", "empty"]),
   sizeBefore: Schema.Number,
   sizeAfter: Schema.Number,
   freedBytes: Schema.Number,
-  // Always false: the open database is cleared, never unlinked.
   droppedFile: Schema.Boolean,
 })
+
+const StalenessOutput = Schema.Struct({
+  staleFiles: Schema.Int,
+  missingFiles: Schema.Int,
+  totalFiles: Schema.Int,
+  topStale: Schema.Array(Schema.Struct({ path: Schema.String, mtimeMs: Schema.Number, indexedAt: Schema.Number })),
+  topMissing: Schema.Array(Schema.Struct({ path: Schema.String, indexedAt: Schema.Number })),
+})
+
+const StatusOutput = Schema.Struct({
+  build: BuildState,
+  readiness: ReadinessResult,
+  autoUpdate: Schema.Struct({
+    status: Schema.Literals(["idle", "watching", "draining", "paused"]),
+    pending: Schema.Number,
+    lastChangeAt: Schema.optional(Schema.Number),
+  }),
+  meta: Schema.optional(GraphMeta),
+  databasePath: Schema.optional(Schema.String),
+  schemaVersion: Schema.optional(Schema.Number),
+})
+
+export const Output = Schema.Struct({
+  op: Schema.String,
+  build: Schema.optional(BuildOutput),
+  remove: Schema.optional(RemoveOutput),
+  staleness: Schema.optional(StalenessOutput),
+  status: Schema.optional(StatusOutput),
+})
+
+type OutputType = typeof Output.Type
 
 const metaOrUndefined = (meta: {
   graphBuiltAt: number
@@ -224,108 +136,8 @@ const metaOrUndefined = (meta: {
       }
     : undefined
 
-export const buildTool = (deps: Deps): Tool.Info<typeof InputBuild, typeof OutputBuild> => ({
-  name: name_build,
-  description:
-    "Use when:\n" +
-    "  building the code graph from scratch, refreshing a stale index, or the user\n" +
-    "  explicitly says 'build' / 'rebuild' / 'index'.\n" +
-    "Examples\n" +
-    '  - "Build the code graph"\n' +
-    '  - "Rebuild the index after editing many files"\n' +
-    '  - "Index this codebase"\n' +
-    "Returns\n" +
-    "  { indexed, skipped, skippedByReason: { gitignored, banyanignored, artifact,\n" +
-    "    tooLarge, minified, tooLargeParse, cached, readError, parseFailure } (9 buckets),\n" +
-    "    parseErrors: [{ path, cause, indexedAt }], symbolsIndexed, duration_ms,\n" +
-    "    meta: { graphVersion, graphCoverage, totalFiles, totalNodes, totalEdges } }\n" +
-    "Avoid when\n" +
-    "  the index is fresh — query first via codegraph_query or repository_query.\n" +
-    "After this, often: codegraph_query or repository_query — to read the graph.\n" +
-    "Before this: none — this is a top-level operation.",
-  input: InputBuild,
-  output: OutputBuild,
-  options: { permission: name_build, codemode: true },
-  execute: (input) =>
-    Effect.gen(function* () {
-      const resolution = resolveProjectRoot(deps.projectRoot(), input.root)
-      if (resolution._tag === "Refused") {
-        return yield* Effect.fail(new Tool.Error({ message: `codegraph_build: ${resolution.message}` }))
-      }
-      const root = resolution.root
-      const configured = deps.excludePatterns ? yield* deps.excludePatterns() : []
-      yield* deps.buildService.start({
-        root,
-        force: input.force ?? false,
-        ...(configured.length > 0 ? { excludePatterns: configured } : {}),
-      })
-
-      let currentStatus = yield* deps.buildService.status()
-      while (currentStatus.status === "running") {
-        yield* Effect.sleep("500 millis")
-        currentStatus = yield* deps.buildService.status()
-      }
-
-      if (currentStatus.status === "failed") {
-        return yield* Effect.fail(
-          new Tool.Error({ message: `codegraph_build failed: ${currentStatus.error ?? "unknown error"}` }),
-        )
-      }
-      if (currentStatus.status === "cancelled") {
-        return yield* Effect.fail(new Tool.Error({ message: "codegraph_build was cancelled" }))
-      }
-
-      const empty = {
-        indexed: 0,
-        skipped: 0,
-        duration_ms: 0,
-        symbolsIndexed: 0,
-        skippedByReason: {
-          gitignored: 0,
-          banyanignored: 0,
-          artifact: 0,
-          tooLarge: 0,
-          minified: 0,
-          tooLargeParse: 0,
-          cached: 0,
-          readError: 0,
-          parseFailure: 0,
-        },
-        parseErrors: [] as Array<{ path: string; cause: string; indexedAt: number }>,
-        meta: undefined,
-      }
-
-      if (currentStatus.status !== "completed" || !currentStatus.result) {
-        return { output: empty, content: renderBuild(empty) }
-      }
-
-      const meta = yield* deps.repo.getMeta()
-      const r = currentStatus.result
-      const output = {
-        indexed: r.indexed,
-        skipped: r.skipped,
-        duration_ms: r.duration_ms,
-        symbolsIndexed: r.symbolsIndexed,
-        skippedByReason: r.skippedByReason,
-        parseErrors: currentStatus.parseErrors ?? [],
-        meta: metaOrUndefined(meta),
-      }
-      return { output, content: renderBuild(output) }
-    }),
-})
-
-const renderBuild = (output: typeof OutputBuild.Type): string => {
-  const r = output.skippedByReason ?? {
-    gitignored: 0,
-    banyanignored: 0,
-    artifact: 0,
-    tooLarge: 0,
-    minified: 0,
-    tooLargeParse: 0,
-    cached: 0,
-    readError: 0,
-    parseFailure: 0,
-  }
+const renderBuild = (output: NonNullable<OutputType["build"]>): string => {
+  const r = output.skippedByReason
   const lines = [
     `indexed=${output.indexed} skipped=${output.skipped}`,
     `skippedByReason.gitignored=${r.gitignored} banyanignored=${r.banyanignored} artifact=${r.artifact}`,
@@ -343,156 +155,159 @@ const renderBuild = (output: typeof OutputBuild.Type): string => {
   return lines.join("\n")
 }
 
-export const queryTool = (deps: Deps): Tool.Info<typeof InputQuery, typeof OutputQuery> => ({
-  name: name_query,
+const renderStaleness = (output: NonNullable<OutputType["staleness"]>): string => {
+  const staleLines = output.topStale.map((file) => `  ${file.path}  mtime=${file.mtimeMs} indexedAt=${file.indexedAt}`).join("\n")
+  const missingLines = output.topMissing.map((file) => `  ${file.path}  indexedAt=${file.indexedAt}`).join("\n")
+  return [
+    `staleFiles=${output.staleFiles} missingFiles=${output.missingFiles} totalFiles=${output.totalFiles} (${output.totalFiles === 0 ? "no graph indexed" : `${Math.round(((output.staleFiles + output.missingFiles) / output.totalFiles) * 100)}% drift`})`,
+    output.topStale.length > 0 ? `Top stale files:\n${staleLines}` : "Top stale files: none.",
+    output.topMissing.length > 0
+      ? `Top missing files (indexed but deleted from disk):\n${missingLines}`
+      : "Top missing files: none.",
+  ].join("\n")
+}
+
+const renderStatus = (output: NonNullable<OutputType["status"]>): string => {
+  const lines = [
+    `build=${output.build.status} readiness=${output.readiness.reason} watcher=${output.autoUpdate.status} pending=${output.autoUpdate.pending}`,
+  ]
+  if (output.build.done !== undefined && output.build.total !== undefined)
+    lines.push(`progress=${output.build.done}/${output.build.total}${output.build.currentFile ? ` current=${output.build.currentFile}` : ""}`)
+  if (output.readiness.warning) lines.push(`warning=${output.readiness.warning}`)
+  if (output.readiness.error) lines.push(`error=${output.readiness.error}`)
+  if (output.meta)
+    lines.push(
+      `meta.graphVersion=${output.meta.graphVersion} meta.graphCoverage=${output.meta.graphCoverage?.toFixed(4) ?? "n/a"} meta.totalFiles=${output.meta.totalFiles} meta.totalNodes=${output.meta.totalNodes}`,
+    )
+  if (output.databasePath) lines.push(`databasePath=${output.databasePath}`)
+  if (output.schemaVersion !== undefined) lines.push(`schemaVersion=${output.schemaVersion}`)
+  return lines.join("\n")
+}
+
+export const tool = (deps: Deps): Tool.Info<typeof Input, typeof Output> => ({
+  name,
   description:
-    "Use when:\n" +
-    "  looking up symbol(s) by name, file, or kind in the code graph (graph-level\n" +
-    "  lookup; not user-facing semantic search).\n" +
-    "Examples\n" +
-    '  - "Where is `ToolCatalog` defined?"\n' +
-    '  - "List all `function` nodes in `src/`"\n' +
-    '  - "Find all symbols named `parse`"\n' +
-    "Returns\n" +
-    "  { nodes: CodegraphNode[], meta: { graphBuiltAt, graphVersion, graphCoverage,\n" +
-    "    totalNodes, totalEdges } }\n" +
-    "Avoid when\n" +
-    "  the user gave an exact file path — use read; or for semantic repository\n" +
-    "  questions — prefer repository_query.\n" +
-    "After this, often: codegraph_callers, codegraph_dependents, codegraph_impact,\n" +
-    "  repository_trace, repository_impact — to traverse the graph.\n" +
-    "Before this: codegraph_build (if not built), repository_query (if unsure).",
-  input: InputQuery,
-  output: OutputQuery,
-  options: { permission: name_query, codemode: true },
+    "Code graph index lifecycle. op=status (build/readiness/watcher state), build (index the workspace; force re-indexes from scratch), remove (clear the index, keep the database file), staleness (drift from the working tree). build and remove change state.",
+  input: Input,
+  output: Output,
+  options: { permission: name, codemode: true },
   execute: (input) =>
     Effect.gen(function* () {
-      const limit = input.limit ?? 50
-      let nodes: CodegraphNode[] = []
-      if (input.function) {
-        nodes = (yield* deps.repo.searchNodesLight({ name: input.function, limit })) as CodegraphNode[]
-      } else if (input.kind) {
-        // TypeScript interfaces are stored with the other named types.
-        nodes = (yield* deps.repo.listNodesByKind(input.kind === "interface" ? "type" : input.kind)).slice(0, limit)
-      } else if (input.file) {
-        const file = yield* deps.repo.getFileByPath(input.file)
-        if (file) nodes = yield* deps.repo.listNodesByFile(file.id)
-      } else {
-        nodes = (yield* deps.repo.searchNodesLight({ limit })) as CodegraphNode[]
+      const configuredRoot = (requested?: string) => resolveProjectRoot(deps.projectRoot(), requested)
+
+      if (input.op === "status") {
+        const [build, readiness, autoUpdate, meta] = yield* Effect.all([
+          deps.buildService.status(),
+          deps.readiness.status(),
+          deps.autoUpdate.state(),
+          deps.repo.getMeta(),
+        ])
+        const status = {
+          build,
+          readiness,
+          autoUpdate,
+          ...(meta ? { meta } : {}),
+          ...(deps.databasePath ? { databasePath: deps.databasePath() } : {}),
+          ...(deps.schemaVersion ? { schemaVersion: deps.schemaVersion() } : {}),
+        }
+        return { output: { op: input.op, status } as OutputType, content: renderStatus(status) }
       }
-      const meta = yield* deps.repo.getMeta()
-      const output = { nodes: nodes.slice(0, limit), meta: metaOrUndefined(meta) }
-      return { output, content: formatNodes(output.nodes, "Query results") }
-    }).pipe(Effect.mapError(() => new Tool.Error({ message: "codegraph_query failed" }))),
-})
 
-export const impactTool = (deps: Deps): Tool.Info<typeof InputImpact, typeof OutputImpact> => ({
-  name: name_impact,
-  description:
-    "Use when:\n" +
-    "  full blast-radius analysis — direct AND transitive dependents of a node.\n" +
-    "Examples\n" +
-    '  - "What breaks if I change `MemoryRepo`?"\n' +
-    "Returns\n" +
-    "  { dependents: CodegraphNode[], transitive: CodegraphNode[], meta: { ... } }\n" +
-    "Avoid when\n" +
-    "  you only need direct callers/dependents — codegraph_callers or\n" +
-    "  codegraph_dependents is cheaper.\n" +
-    "After this, often: repository_impact, edit_plan — to plan an edit.\n" +
-    "Before this: codegraph_query (to find nodeID), codegraph_build (if not built).",
-  input: InputImpact,
-  output: OutputImpact,
-  options: { permission: name_impact, codemode: true },
-  execute: (input) =>
-    Effect.gen(function* () {
-      const limit = input.limit ?? 100
-      const result = yield* deps.analyzer.impact({
-        ...(input.nodeID !== undefined ? { nodeID: input.nodeID } : {}),
-        ...(input.function !== undefined ? { function: input.function } : {}),
-      })
-      const meta = yield* deps.repo.getMeta()
-      const output = {
-        dependents: result.dependents.slice(0, limit),
-        transitive: result.transitive.slice(0, limit),
-        meta: metaOrUndefined(meta),
+      if (input.op === "staleness") {
+        const resolution = configuredRoot(input.root)
+        const root = resolution._tag === "Ok" ? resolution.root : deps.projectRoot()
+        const totalFiles = yield* deps.repo.countFiles()
+        if (totalFiles === 0) {
+          const output = { staleFiles: 0, missingFiles: 0, totalFiles: 0, topStale: [], topMissing: [] }
+          return { output: { op: input.op, staleness: output }, content: renderStaleness(output) }
+        }
+        const staleFiles = yield* deps.repo.countStaleFiles()
+        const topStale = yield* deps.repo.listStaleFiles(10)
+        const all = yield* deps.repo.listAllFiles()
+        const missing = all
+          .filter((file) => {
+            const candidate = path.isAbsolute(file.path) ? file.path : path.join(root, file.path)
+            return !existsSync(candidate)
+          })
+          .map((file) => ({ path: file.path, indexedAt: file.indexedAt }))
+        const output = {
+          staleFiles,
+          missingFiles: missing.length,
+          totalFiles,
+          topStale: [...topStale],
+          topMissing: missing.slice(0, 10),
+        }
+        return { output: { op: input.op, staleness: output }, content: renderStaleness(output) }
       }
-      return {
-        output,
-        content: `${formatNodes(output.dependents, "Direct dependents")}\n${formatNodes(output.transitive, "Transitive dependents")}`,
+
+      const resolution = configuredRoot(input.root)
+      if (input.op === "build") {
+        if (resolution._tag === "Refused") {
+          return yield* Effect.fail(new Tool.Error({ message: `codegraph build: ${resolution.message}` }))
+        }
+        const configured = deps.excludePatterns ? yield* deps.excludePatterns() : []
+        yield* deps.buildService.start({
+          root: resolution.root,
+          force: input.force ?? false,
+          ...(configured.length > 0 ? { excludePatterns: configured } : {}),
+        })
+
+        let currentStatus = yield* deps.buildService.status()
+        while (currentStatus.status === "running") {
+          yield* Effect.sleep("500 millis")
+          currentStatus = yield* deps.buildService.status()
+        }
+
+        if (currentStatus.status === "failed") {
+          return yield* Effect.fail(
+            new Tool.Error({ message: `codegraph build failed: ${currentStatus.error ?? "unknown error"}` }),
+          )
+        }
+        if (currentStatus.status === "cancelled") {
+          return yield* Effect.fail(new Tool.Error({ message: "codegraph build was cancelled" }))
+        }
+
+        const empty = {
+          indexed: 0,
+          skipped: 0,
+          duration_ms: 0,
+          symbolsIndexed: 0,
+          skippedByReason: {
+            gitignored: 0,
+            banyanignored: 0,
+            artifact: 0,
+            tooLarge: 0,
+            minified: 0,
+            tooLargeParse: 0,
+            cached: 0,
+            readError: 0,
+            parseFailure: 0,
+          },
+          parseErrors: [] as Array<{ path: string; cause: string; indexedAt: number }>,
+          meta: undefined,
+        }
+
+        if (currentStatus.status !== "completed" || !currentStatus.result) {
+          return { output: { op: input.op, build: empty } as OutputType, content: renderBuild(empty) }
+        }
+
+        const meta = yield* deps.repo.getMeta()
+        const r = currentStatus.result
+        const output = {
+          indexed: r.indexed,
+          skipped: r.skipped,
+          duration_ms: r.duration_ms,
+          symbolsIndexed: r.symbolsIndexed,
+          skippedByReason: r.skippedByReason,
+          parseErrors: currentStatus.parseErrors ?? [],
+          meta: metaOrUndefined(meta),
+        }
+        return { output: { op: input.op, build: output } as OutputType, content: renderBuild(output) }
       }
-    }).pipe(Effect.mapError(() => new Tool.Error({ message: "codegraph_impact failed" }))),
-})
 
-export const dependentsTool = (deps: Deps): Tool.Info<typeof InputDependents, typeof OutputDependents> => ({
-  name: name_dependents,
-  description:
-    "Use when:\n" +
-    "  finding direct dependents (who calls/imports a given node) — graph-level.\n" +
-    "Examples\n" +
-    '  - "What depends on `Repository`?"\n' +
-    '  - "Who imports `SessionProcessor`?"\n' +
-    "Returns\n" +
-    "  { dependents: CodegraphNode[], meta: { ... } }\n" +
-    "Avoid when\n" +
-    "  you want transitive blast radius — use codegraph_impact.\n" +
-    "After this, often: codegraph_impact — for transitive reach.\n" +
-    "Before this: codegraph_query (to find nodeID).",
-  input: InputDependents,
-  output: OutputDependents,
-  options: { permission: name_dependents, codemode: true },
-  execute: (input) =>
-    Effect.gen(function* () {
-      const limit = input.limit ?? 50
-      const result = yield* deps.analyzer.dependents({
-        ...(input.nodeID !== undefined ? { nodeID: input.nodeID } : {}),
-        ...(input.function !== undefined ? { function: input.function } : {}),
-      })
-      const meta = yield* deps.repo.getMeta()
-      const output = { dependents: result.slice(0, limit), meta: metaOrUndefined(meta) }
-      return { output, content: formatNodes(output.dependents as CodegraphNode[], "Dependents") }
-    }).pipe(Effect.mapError(() => new Tool.Error({ message: "codegraph_dependents failed" }))),
-})
-
-export const callersTool = (deps: Deps): Tool.Info<typeof InputCallers, typeof OutputCallers> => ({
-  name: name_callers,
-  description:
-    "Use when:\n" +
-    "  finding what calls a function (graph-level reverse lookup).\n" +
-    "Examples\n" +
-    '  - "Who calls `parse()`?"\n' +
-    '  - "What invokes `execute()`?"\n' +
-    "Returns\n" +
-    "  { callers: CodegraphNode[], meta: { ... } }\n" +
-    "Avoid when\n" +
-    "  you want transitive dependents — use codegraph_impact.\n" +
-    "After this, often: repository_impact, edit_plan — to plan around the callers.\n" +
-    "Before this: codegraph_query (to find nodeID).",
-  input: InputCallers,
-  output: OutputCallers,
-  options: { permission: name_callers, codemode: true },
-  execute: (input) =>
-    Effect.gen(function* () {
-      const limit = input.limit ?? 50
-      const result = yield* deps.analyzer.callers({
-        ...(input.nodeID !== undefined ? { nodeID: input.nodeID } : {}),
-        ...(input.function !== undefined ? { function: input.function } : {}),
-      })
-      const meta = yield* deps.repo.getMeta()
-      const output = { callers: result.slice(0, limit), meta: metaOrUndefined(meta) }
-      return { output, content: formatNodes(output.callers as CodegraphNode[], "Callers") }
-    }).pipe(Effect.mapError(() => new Tool.Error({ message: "codegraph_callers failed" }))),
-})
-
-export const removeTool = (deps: Deps): Tool.Info<typeof InputRemove, typeof OutputRemove> => ({
-  name: name_remove,
-  description:
-    "Remove the current codegraph index. Use to recover from a corrupt or stale graph. " +
-    "Does not delete the banyancode.db file by default (it is shared with sessions and memory).",
-  input: InputRemove,
-  output: OutputRemove,
-  options: { permission: name_remove, codemode: true },
-  execute: (input) =>
-    Effect.gen(function* () {
+      // op=remove: stop a running build first so it cannot write rows into the
+      // tables being cleared, then wipe and reset the last-run state.
+      yield* deps.buildService.cancel()
       const [filesBefore, nodesBefore, edgesBefore] = yield* Effect.all([
         deps.repo.countFiles(),
         deps.repo.countNodes(),
@@ -502,6 +317,7 @@ export const removeTool = (deps: Deps): Tool.Info<typeof InputRemove, typeof Out
       const { sizeBefore, sizeAfter, droppedFile } = yield* deps.repo.clearAll({
         dropFile: input.dropFile ?? false,
       })
+      yield* deps.buildService.reset()
       const freedBytes = Math.max(0, sizeBefore - sizeAfter)
       const output = {
         status: (graphWasEmpty ? "empty" : "removed") as "empty" | "removed",
@@ -518,15 +334,6 @@ export const removeTool = (deps: Deps): Tool.Info<typeof InputRemove, typeof Out
         output.status === "empty"
           ? "Codegraph index was already empty."
           : `Codegraph index removed. Freed ${output.freedBytes} bytes (${output.sizeBefore} -> ${output.sizeAfter}).${cleared}`
-      return { output, content }
-    }).pipe(Effect.mapError(() => new Tool.Error({ message: "codegraph_remove failed" }))),
+      return { output: { op: input.op, remove: output } as OutputType, content }
+    }),
 })
-
-export const tools = (deps: Deps): ReadonlyArray<Tool.Info> => [
-  buildTool(deps),
-  queryTool(deps),
-  impactTool(deps),
-  dependentsTool(deps),
-  callersTool(deps),
-  removeTool(deps),
-]

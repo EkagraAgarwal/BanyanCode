@@ -302,7 +302,7 @@ export const computePreflight = (
       risks.push({
         kind: "no-target",
         severity: "high",
-        message: `target "${input.target}" not found in the code graph; verify spelling or run codegraph_build`,
+        message: `target "${input.target}" not found in the code graph; verify spelling or run codegraph op=build`,
       })
     } else if (directCallers.length === 0) {
       risks.push({

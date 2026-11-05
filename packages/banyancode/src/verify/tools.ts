@@ -61,7 +61,7 @@ export const makeTestTool = (ctx: Context, verifier: VerifierInterface): Tool.In
     '  { status, summary: {passed, failed, skipped}, durationMs, cacheHit, rawOutput? }\n' +
     "Avoid when\n" +
     "  you only need a single test name — `bun test` already supports `-t <name>` via the shell tool.\n" +
-    "After this, often: typecheck (to confirm types), blast_radius (to see what else is affected).",
+    "After this, often: typecheck (to confirm types), change_check op=blast_radius (to see what else is affected).",
   input: TestInput,
   output: TestOutput,
   options: { permission: NAME_TEST },
@@ -107,7 +107,7 @@ export const makeTypecheckTool = (
     '  { status: "passed" | "failed" | "errored", summary: {}, durationMs, cacheHit, rawOutput? }\n' +
     "Avoid when\n" +
     "  you only need a quick syntax check — the lint tool is cheaper.\n" +
-    "After this, often: test (to run impacted suites), blast_radius (if failures span files).\n" +
+    "After this, often: test (to run impacted suites), change_check op=blast_radius (if failures span files).\n" +
     "Cache: 1-hour TTL on (path, package.json hash, tsconfig.json hash). Re-runs within the window return `cacheHit: true`.",
   input: TypecheckInput,
   output: TypecheckOutput,
@@ -150,7 +150,7 @@ export const makeLintTool = (ctx: Context, verifier: VerifierInterface): Tool.In
     '  { status, summary: {}, durationMs, cacheHit, rawOutput?, command }\n' +
     "Avoid when\n" +
     "  you only need a type check — use banyan_typecheck instead.\n" +
-    "After this, often: test (to run impacted suites), blast_radius (if many files are touched).",
+    "After this, often: test (to run impacted suites), change_check op=blast_radius (if many files are touched).",
   input: LintInput,
   output: LintOutput,
   options: { permission: NAME_LINT },

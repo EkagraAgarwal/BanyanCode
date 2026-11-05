@@ -186,7 +186,7 @@ export const scoreMatch = (needle: string, haystack: string): number => {
 }
 
 /** v2 has no tool visibility tiers; these are the tools v1 marked internal. */
-const INTERNAL_TOOL_PREFIXES = ["codegraph_", "repository_", "banyan_typecheck", "banyan_lint"]
+const INTERNAL_TOOL_PREFIXES = ["codegraph", "repo", "change_check", "banyan_typecheck", "banyan_lint"]
 
 export const tierFor = (id: string, recent: ReadonlySet<string>): "hot" | "warm" | "cold" => {
   if (recent.has(id)) return "hot"

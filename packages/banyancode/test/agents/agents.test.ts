@@ -170,7 +170,7 @@ describe("banyancode agents", () => {
       expect(lastEffect(rules, "shell", "rm -rf build")).toBe("deny")
       expect(lastEffect(rules, "read", "src/a.ts")).toBe("allow")
       expect(lastEffect(rules, "read", ".env")).toBe("ask")
-      expect(lastEffect(rules, "repository_query")).toBe("allow")
+      expect(lastEffect(rules, "repo")).toBe("allow")
     }
     expect(lastEffect(agents.get("scout")!.permissions, "todowrite")).toBe("deny")
     expect(lastEffect(agents.get("scout")!.permissions, "websearch")).toBe("allow")

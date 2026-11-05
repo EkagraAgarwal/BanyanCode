@@ -52,9 +52,10 @@ const agent = (id: string) => {
 
 describe("registered Banyan tools are reachable", () => {
   test("the registered id set matches the workstreams", () => {
-    expect(registeredToolIds).toContain("codegraph_build")
-    expect(registeredToolIds).toContain("codegraph_search")
-    expect(registeredToolIds).toContain("repository_query")
+    expect(registeredToolIds).toContain("codegraph")
+    expect(registeredToolIds).toContain("code_find")
+    expect(registeredToolIds).toContain("repo")
+    expect(registeredToolIds).toContain("change_check")
     expect(registeredToolIds).toContain("banyan_typecheck")
     expect(registeredToolIds).toContain("subagent_message")
     expect(registeredToolIds).toContain("shared_memory")

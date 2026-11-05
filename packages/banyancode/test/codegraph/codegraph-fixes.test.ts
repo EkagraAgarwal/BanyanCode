@@ -19,7 +19,7 @@ import { make as makeAutoUpdate } from "../../src/codegraph/codegraph-auto-updat
 import { watch as fsWatch } from "node:fs"
 import { make as makeWatcher, type Update } from "../../src/codegraph/codegraph-watcher.js"
 import { make as makeAnalyzer } from "../../src/codegraph/codegraph-analyzer.js"
-import { buildTool } from "../../src/codegraph/tools/codegraph.js"
+import { tool as codegraphTool } from "../../src/codegraph/tools/codegraph.js"
 import { resolveGraphTargetPure } from "../../src/codegraph/symbol-resolver.js"
 import { resolveProjectRoot } from "../../src/codegraph/workspace-identity.js"
 
@@ -48,6 +48,7 @@ const withServices = async (
     buildService: Effect.Success<ReturnType<typeof makeBuildService>>
     readiness: Effect.Success<ReturnType<typeof makeReadiness>>
     analyzer: ReturnType<typeof makeAnalyzer>
+    autoUpdate: { state: () => Effect.Effect<{ status: "idle"; pending: number }> }
   }) => Effect.Effect<void, unknown, never>,
 ) =>
   Effect.runPromise(
@@ -58,7 +59,8 @@ const withServices = async (
         const indexer = yield* makeIndexer(repo, storage)
         const buildService = yield* makeBuildService({ indexer, repo, dbPath: () => storage.path })
         const readiness = yield* makeReadiness({ buildService, repo })
-        yield* fn({ storage, repo, indexer, buildService, readiness, analyzer: makeAnalyzer(repo) })
+        const autoUpdate = { state: () => Effect.succeed({ status: "idle" as const, pending: 0 }) }
+        yield* fn({ storage, repo, indexer, buildService, readiness, analyzer: makeAnalyzer(repo), autoUpdate })
       }),
     ),
   )
@@ -96,18 +98,24 @@ describe("codegraph root resolution", () => {
       await write(project, "src/math.ts", "export function add(a: number, b: number) { return a + b }\n")
       await withTemp(async (other) => {
         await write(other, "src/other.ts", "export function elsewhere() { return 1 }\n")
-        await withServices(project, ({ repo, analyzer, buildService }) =>
+        await withServices(project, ({ repo, buildService, readiness, autoUpdate }) =>
           Effect.gen(function* () {
-            const tool = buildTool({ repo, analyzer, buildService, projectRoot: () => project })
-            const result = yield* tool.execute({}, {} as never)
-            expect((result.output as { indexed: number }).indexed).toBe(1)
+            const tool = codegraphTool({
+              repo,
+              buildService,
+              readiness,
+              autoUpdate: autoUpdate as never,
+              projectRoot: () => project,
+            })
+            const result = yield* tool.execute({ op: "build" }, {} as never)
+            expect((result.output as { build: { indexed: number } }).build.indexed).toBe(1)
             const state = yield* buildService.status()
             expect(state.root).toBe(project)
             const files = yield* repo.listAllFiles()
             expect(files.map((f) => f.path).some((p) => p.endsWith("math.ts"))).toBe(true)
             expect(files.map((f) => f.path).some((p) => p.endsWith("other.ts"))).toBe(false)
 
-            const refused = yield* tool.execute({ root: other }, {} as never).pipe(
+            const refused = yield* tool.execute({ op: "build", root: other }, {} as never).pipe(
               Effect.match({
                 onFailure: (error) => error.message,
                 onSuccess: () => "",
@@ -155,16 +163,17 @@ describe("codegraph exclude patterns", () => {
     await withTemp(async (directory) => {
       await write(directory, "src/math.ts", "export function add() { return 1 }\n")
       await write(directory, "docs/readme.md", "# docs\n")
-      await withServices(directory, ({ repo, analyzer, buildService }) =>
+      await withServices(directory, ({ repo, buildService, readiness, autoUpdate }) =>
         Effect.gen(function* () {
-          const tool = buildTool({
+          const tool = codegraphTool({
             repo,
-            analyzer,
             buildService,
+            readiness,
+            autoUpdate: autoUpdate as never,
             projectRoot: () => directory,
             excludePatterns: () => Effect.succeed(["src/**"]),
           })
-          yield* tool.execute({}, {} as never)
+          yield* tool.execute({ op: "build" }, {} as never)
           const files = (yield* repo.listAllFiles()).map((f) => f.path.replace(/\\/g, "/"))
           expect(files.some((p) => p.endsWith("src/math.ts"))).toBe(false)
           expect(files.some((p) => p.endsWith("docs/readme.md"))).toBe(true)

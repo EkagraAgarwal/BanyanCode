@@ -2,6 +2,7 @@ import { Rpc } from "@opencode/schema/rpc"
 import type { RpcCallContext, RpcHandlers } from "@opencode/plugin/effect/rpc"
 import { Effect, Schema } from "effect"
 import { computeBlastRadius } from "./blast-radius.js"
+import type { CodeFindGraph } from "./code-find.js"
 import { computeCodeFind } from "./code-find.js"
 import type { CodegraphPort } from "./codegraph-port.js"
 import type { EditPlannerInterface } from "./edit-planner.js"
@@ -94,6 +95,7 @@ export interface HandlerDeps {
   readonly port: CodegraphPort
   readonly intel: Intelligence
   readonly planner: EditPlannerInterface
+  readonly graph?: CodeFindGraph
 }
 
 export const handlers = (deps: HandlerDeps): RpcHandlers<typeof Definition> => ({
@@ -117,7 +119,7 @@ export const handlers = (deps: HandlerDeps): RpcHandlers<typeof Definition> => (
     }),
   slice: (input: typeof ArchitecturalSliceQuery.Type) => deps.intel.explain({ symbol: input.focus }),
   codeFind: (input: typeof CodeFindRpcInput.Type) =>
-    computeCodeFind(deps.port, { ...input, includeKeywordFallback: input.includeKeywordFallback ?? true }),
+    computeCodeFind(deps.port, { ...input, includeKeywordFallback: input.includeKeywordFallback ?? true }, deps.graph),
   preflight: (input: typeof PreflightInput.Type) =>
     computePreflight({ port: deps.port, intel: deps.intel }, input),
   blastRadius: (input: typeof BlastRadiusInput.Type) =>

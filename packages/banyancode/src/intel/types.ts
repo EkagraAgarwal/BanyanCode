@@ -437,14 +437,50 @@ export const EditPlanOutput = Schema.Struct({
   meta: Schema.optional(GraphMetaSchema),
 })
 
+export const CODE_FIND_INTENTS = [
+  "definition",
+  "usages",
+  "callers",
+  "references",
+  "dependents",
+  "impact",
+  "implementations",
+  "overrides",
+  "symbols",
+  "search",
+  "find_file",
+] as const
+
+export type CodeFindIntent = (typeof CODE_FIND_INTENTS)[number]
+
 export const CodeFindInput = Schema.Struct({
-  intent: Schema.Literals(["definition", "callers", "dependents", "impact", "find_file"]),
+  intent: Schema.Literals([...CODE_FIND_INTENTS]),
   target: Schema.String,
-  includeKeywordFallback: Schema.Boolean,
+  path: Schema.optional(Schema.String),
+  /** Glob over indexed paths; narrows results the same way grep's `include` does. */
+  include: Schema.optional(Schema.String),
+  includeKeywordFallback: Schema.optional(Schema.Boolean),
   limit: Schema.optional(Schema.Number),
 })
 
 export type CodeFindInput = typeof CodeFindInput.Type
+
+export const SearchSignalsSchema = Schema.Struct({
+  exact: Schema.optional(Schema.Boolean),
+  prefix: Schema.optional(Schema.Boolean),
+  camelCase: Schema.optional(Schema.Boolean),
+  snake_case: Schema.optional(Schema.Boolean),
+  bm25: Schema.optional(Schema.Number),
+  fuzzy: Schema.optional(Schema.Number),
+  qualified: Schema.optional(Schema.Boolean),
+  graph: Schema.optional(Schema.Number),
+})
+
+export const CodeFindResultSchema = Schema.Struct({
+  node: GraphNodeSchema,
+  score: Schema.Number,
+  signals: SearchSignalsSchema,
+})
 
 export const CodeFindOutput = Schema.Struct({
   matches: Schema.Array(
@@ -459,6 +495,7 @@ export const CodeFindOutput = Schema.Struct({
       path: Schema.String,
     }),
   ),
+  results: Schema.optional(Schema.Array(CodeFindResultSchema)),
   meta: Schema.optional(GraphMetaSchema),
   intent: Schema.String,
   dispatchedTo: Schema.optional(Schema.String),
@@ -471,6 +508,35 @@ export const CodeFindOutput = Schema.Struct({
 })
 
 export type CodeFindOutput = typeof CodeFindOutput.Type
+
+export const OutlineSymbolSchema = Schema.Struct({
+  kind: Schema.Literals([...NODE_KINDS]),
+  name: Schema.String,
+  startLine: Schema.Number,
+  endLine: Schema.Number,
+  signature: Schema.optional(Schema.String),
+})
+
+export const OutlineSchema = Schema.Struct({
+  path: Schema.String,
+  fileID: Schema.String,
+  language: Schema.optional(Schema.String),
+  header: Schema.String,
+  imports: Schema.Number,
+  references: Schema.Number,
+  callers: Schema.Number,
+  dependents: Schema.Number,
+  symbols: Schema.Array(OutlineSymbolSchema),
+  truncated: Schema.Boolean,
+  meta: Schema.optional(GraphMetaSchema),
+})
+
+export type Outline = typeof OutlineSchema.Type
+
+export const RepoFileSchema = Schema.Struct({
+  path: Schema.String,
+  language: Schema.optional(Schema.String),
+})
 
 export const QueryInput = Schema.Struct({
   query: Schema.String,

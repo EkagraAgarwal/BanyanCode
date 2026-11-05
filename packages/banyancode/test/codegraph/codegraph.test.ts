@@ -26,10 +26,10 @@ import {
   renderPolicyParts,
   POLICY_TEXT,
 } from "../../src/codegraph/system-policy.js"
-import { tool as codeFindTool } from "../../src/codegraph/tools/code-find.js"
-import { tool as searchTool } from "../../src/codegraph/tools/codegraph-search-tool.js"
-import { tool as stalenessTool } from "../../src/codegraph/tools/codegraph-staleness.js"
+import { tool as codegraphTool } from "../../src/codegraph/tools/codegraph.js"
 import { TOOL_IDS } from "../../src/codegraph/index.js"
+import { make as makeCodegraphPort } from "../../src/integration/codegraph-port.js"
+import { computeCodeFind, renderCodeFind } from "../../src/intel/code-find.js"
 
 const withTemp = async (fn: (directory: string) => Promise<void>) => {
   const directory = await mkdtemp(join(tmpdir(), "banyancode-codegraph-"))
@@ -86,6 +86,7 @@ const withServices = async (
     indexer: Effect.Success<ReturnType<typeof makeIndexer>>
     buildService: Effect.Success<ReturnType<typeof makeBuildService>>
     readiness: Effect.Success<ReturnType<typeof makeReadiness>>
+    autoUpdate: { state: () => Effect.Effect<{ status: "idle"; pending: number }> }
   }) => Effect.Effect<void, unknown, Scope.Scope>,
 ) =>
   Effect.runPromise(
@@ -96,7 +97,8 @@ const withServices = async (
         const indexer = yield* makeIndexer(repo, storage)
         const buildService = yield* makeBuildService({ indexer, repo, dbPath: () => storage.path })
         const readiness = yield* makeReadiness({ buildService, repo })
-        yield* fn({ storage, repo, indexer, buildService, readiness })
+        const autoUpdate = { state: () => Effect.succeed({ status: "idle" as const, pending: 0 }) }
+        yield* fn({ storage, repo, indexer, buildService, readiness, autoUpdate })
       }),
     ),
   )
@@ -164,7 +166,7 @@ describe("codegraph indexer", () => {
   test("resolves definitions and callers, and renders code_find output", async () => {
     await withTemp(async (directory) => {
       await seedRepo(directory)
-      await withServices(directory, ({ repo, indexer, readiness }) =>
+      await withServices(directory, ({ repo, indexer }) =>
         Effect.gen(function* () {
           yield* indexer.index({ root: directory, force: true })
           const analyzer = makeAnalyzer(repo)
@@ -176,15 +178,17 @@ describe("codegraph indexer", () => {
           const callers = yield* analyzer.callers({ function: "add" }).pipe(Effect.orElseSucceed(() => []))
           expect(callers.map((c) => c.name)).toContain("double")
 
-          const find = codeFindTool({ repo, analyzer, readiness, projectRoot: () => directory })
-          const result = yield* find.execute(
+          const graph = { search: makeSearch(repo), structural: makeStructural(repo) }
+          const output = yield* computeCodeFind(
+            makeCodegraphPort(repo),
             { intent: "definition", target: "double", includeKeywordFallback: true },
-            {} as never,
+            graph,
           )
-          expect(result.content).toContain("matches=1")
-          expect(result.content).toContain("function double")
-          expect(result.content).toContain("math.ts")
-          expect((result.output as { matches: readonly unknown[] }).matches).toHaveLength(1)
+          const content = renderCodeFind(output)
+          expect(content).toContain("matches=1")
+          expect(content).toContain("function double")
+          expect(content).toContain("math.ts")
+          expect(output.matches).toHaveLength(1)
         }),
       )
     })
@@ -460,13 +464,13 @@ describe("codegraph tools", () => {
       await withServices(directory, ({ repo, indexer }) =>
         Effect.gen(function* () {
           yield* indexer.index({ root: directory, force: true })
-          const search = makeSearch(repo)
-          const structural = makeStructural(repo)
-          const tool = searchTool({ repo, search, structural })
-          const result = yield* tool.execute({ query: "double", modes: ["fuzzy", "exact"] }, {} as never)
-          expect(result.content).toContain("Search results")
-          const output = result.output as { results: readonly { node: { name: string } }[] }
-          expect(output.results.some((r) => r.node.name === "double")).toBe(true)
+          const output = yield* computeCodeFind(
+            makeCodegraphPort(repo),
+            { intent: "search", target: "double" },
+            { search: makeSearch(repo), structural: makeStructural(repo) },
+          )
+          expect(renderCodeFind(output)).toContain("Search results")
+          expect(output.results?.some((r) => r.node.name === "double")).toBe(true)
         }),
       )
     })
@@ -475,13 +479,19 @@ describe("codegraph tools", () => {
   test("codegraph_staleness counts touched files after indexing", async () => {
     await withTemp(async (directory) => {
       await seedRepo(directory)
-      await withServices(directory, ({ repo, indexer, storage }) =>
+      await withServices(directory, ({ repo, indexer, storage, buildService, readiness, autoUpdate }) =>
         Effect.gen(function* () {
           yield* indexer.index({ root: directory, force: true })
           expect(yield* repo.countStaleFiles()).toBe(0)
 
-          const tool = stalenessTool({ repo, projectRoot: () => directory })
-          const clean = yield* tool.execute({}, {} as never)
+          const tool = codegraphTool({
+            repo,
+            buildService,
+            readiness,
+            autoUpdate: autoUpdate as never,
+            projectRoot: () => directory,
+          })
+          const clean = yield* tool.execute({ op: "staleness" }, {} as never)
           expect(clean.content).toContain("staleFiles=0")
           expect(clean.content).toContain("Top stale files: none.")
 
@@ -495,7 +505,7 @@ describe("codegraph tools", () => {
           ])
           expect(yield* repo.countStaleFiles()).toBe(1)
 
-          const stale = yield* tool.execute({}, {} as never)
+          const stale = yield* tool.execute({ op: "staleness" }, {} as never)
           expect(stale.content).toContain("staleFiles=1")
           expect(stale.content).toContain("math.ts")
           expect(target.length).toBeGreaterThan(0)
@@ -537,19 +547,19 @@ describe("codegraph remove", () => {
 describe("codegraph system policy", () => {
   test("renders the v1 policy plus a guide for registered tools only", () => {
     const text = renderPolicy({
-      tools: [{ id: "codegraph_build", description: "Build (or rebuild) the code graph. Extra detail." }],
+      tools: [{ id: "codegraph", description: "Build (or rebuild) the code graph. Extra detail." }],
       graph: { state: "ready", symbols: 42 },
     })
     expect(text).toContain(POLICY_TEXT)
     expect(text).toContain("## BanyanCode tool guide")
-    expect(text).toContain("**codegraph_build** — Build (or rebuild) the code graph.")
+    expect(text).toContain("**codegraph** — Build (or rebuild) the code graph.")
     expect(text).toContain("Graph state: ready (42 symbols)")
     // Tools outside the registered list never appear.
-    expect(text).not.toContain("codegraph_impact")
+    expect(text).not.toContain("**change_check**")
   })
 
   test("splits the static policy from the live graph line byte-identically", () => {
-    const tools = [{ id: "codegraph_build", description: "Build (or rebuild) the code graph. Extra detail." }]
+    const tools = [{ id: "codegraph", description: "Build (or rebuild) the code graph. Extra detail." }]
     const graph = { state: "ready", symbols: 42 } as const
     const parts = renderPolicyParts({ tools, graph })
     expect(parts.dynamic).toBe(graphLineFor(graph))
@@ -562,7 +572,7 @@ describe("codegraph system policy", () => {
   })
 
   test("stable prefix on emits the graph line as its own trailing volatile part", () => {
-    const tools = [{ id: "codegraph_build", description: "Build (or rebuild) the code graph. Extra detail." }]
+    const tools = [{ id: "codegraph", description: "Build (or rebuild) the code graph. Extra detail." }]
     const graph = { state: "missing" } as const
     const on = policySystemParts({ tools, graph, stablePrefix: true })
     expect(on).toHaveLength(2)
@@ -577,29 +587,14 @@ describe("codegraph system policy", () => {
   })
 
   test("consecutive turns keep every stable byte when only the graph state flips", () => {
-    const tools = [{ id: "codegraph_build", description: "Build (or rebuild) the code graph. Extra detail." }]
+    const tools = [{ id: "codegraph", description: "Build (or rebuild) the code graph. Extra detail." }]
     const first = policySystemParts({ tools, graph: { state: "building" }, stablePrefix: true })
     const second = policySystemParts({ tools, graph: { state: "ready", symbols: 1234 }, stablePrefix: true })
     expect(second[0]).toEqual(first[0])
     expect(second[1]!.text).not.toBe(first[1]!.text)
   })
 
-  test("keeps the exact v1 tool ids", () => {
-    expect([...TOOL_IDS]).toEqual([
-      "codegraph_build",
-      "codegraph_query",
-      "codegraph_impact",
-      "codegraph_dependents",
-      "codegraph_callers",
-      "codegraph_remove",
-      "code_find",
-      "codegraph_staleness",
-      "codegraph_search",
-      "codegraph_find_implementations",
-      "codegraph_find_overrides",
-      "codegraph_find_recursive",
-      "codegraph_find_async",
-      "codegraph_find_http_routes",
-    ])
+  test("registers the single codegraph lifecycle tool", () => {
+    expect([...TOOL_IDS]).toEqual(["codegraph"])
   })
 })

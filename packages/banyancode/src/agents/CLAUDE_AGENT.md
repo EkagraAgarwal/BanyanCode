@@ -34,7 +34,7 @@ note records what the agent layer must know about it.
 - **Tools.** Every tool reaches Claude as an MCP tool named
   `mcp__opencode__<name>` (`tools/names.ts:6`). The `mcp__opencode__` prefix
   survives; the bare name is hashed/truncated only when it exceeds 64
-  characters, so `banyan_*`, `repository_*`, `codegraph_*` and the rest keep
+  characters, so `banyan_*`, `code_find`, `repo`, `codegraph` and the rest keep
   their ids and descriptions. Descriptions are cut at 2048 characters; the
   `subagent` tool moves its "Available subagents:" block to the front so the
   list survives the cut.

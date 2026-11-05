@@ -54,20 +54,12 @@ describe("workstream 3c public surface", () => {
     expect(Object.keys(VerifyDefinition.events)).toEqual([])
   })
 
-  test("tool IDs match v1 exactly", () => {
+  test("tool IDs are the consolidated surface", () => {
     expect(INTEL_TOOL_NAMES).toEqual({
-      query: "repository_query",
-      explain: "repository_explain",
-      impact: "repository_impact",
-      trace: "repository_trace",
-      tests: "repository_tests",
-      symbols: "repository_symbols",
-      relationships: "repository_relationships",
-      ownership: "repository_ownership",
-      preflight: "preflight",
-      blastRadius: "blast_radius",
+      codeFind: "code_find",
+      repo: "repo",
+      changeCheck: "change_check",
       safeRename: "safe_rename",
-      editPlan: "edit_plan",
     })
     expect(NAME_TEST).toBe("banyan_test")
     expect(NAME_TYPECHECK).toBe("banyan_typecheck")

@@ -87,14 +87,14 @@ describe("system tools", () => {
     expect(scoreMatch("verify", "my-verify-tool")).toBe(2)
     expect(scoreMatch("verify", "other")).toBe(1)
     expect(tierFor("banyan_test", new Set(["banyan_test"]))).toBe("hot")
-    expect(tierFor("codegraph_query", new Set())).toBe("cold")
+    expect(tierFor("codegraph", new Set())).toBe("cold")
     expect(tierFor("websearch", new Set())).toBe("warm")
   })
 
   test("banyan_tool_search ranks registered tools and reports diagnostics", async () => {
     const registered = [
       { id: "banyan_test", description: "Run tests", input: undefined },
-      { id: "codegraph_query", description: "Query the graph", input: undefined },
+      { id: "codegraph", description: "Query the graph", input: undefined },
       { id: "websearch", description: "Search the web", input: undefined },
     ]
     const asserted: string[] = []

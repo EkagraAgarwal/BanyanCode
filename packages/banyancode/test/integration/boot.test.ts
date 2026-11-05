@@ -97,15 +97,7 @@ it.live(
       // registered (`src/server.ts:193-201` builds `availableTools` from this list). Every rewrite
       // target must be present under exactly this id — a namespace prefix would silently disable
       // the route at run time.
-      for (const id of [
-        "code_find",
-        "codegraph_callers",
-        "codegraph_dependents",
-        "codegraph_find_implementations",
-        "repository_explain",
-        "repository_ownership",
-        "codegraph_search",
-      ]) {
+      for (const id of ["code_find", "repo", "change_check", "safe_rename", "codegraph"]) {
         expect(registered.has(id), `gateway rewrite target ${id} is not registered`).toBe(true)
       }
 

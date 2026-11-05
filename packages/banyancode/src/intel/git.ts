@@ -2,7 +2,7 @@ import { execFile } from "node:child_process"
 import { Effect } from "effect"
 
 /**
- * Git reads used by `repository_query` and `repository_ownership`. Ported
+ * Git reads used by `repo op=query` and `repo op=ownership`. Ported
  * from v1 `repository-intelligence/git-service.ts`, but on `node:child_process`
  * so the plugin works in both the Bun and Node builds.
  *
