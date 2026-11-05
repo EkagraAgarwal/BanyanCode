@@ -2,8 +2,9 @@ import { Plugin } from "@opencode/plugin/tui"
 import { createMemo, createSignal, Match, Show, Switch } from "solid-js"
 import { contextUsage, formatContextUsage } from "../../util/session"
 import { useTerminalDimensions } from "@opentui/solid"
-import { TextAttributes } from "@opentui/core"
+import { RGBA, TextAttributes } from "@opentui/core"
 import { useInteractivity } from "../../context/interactivity"
+import { useLocal } from "../../context/local"
 import { stringWidth } from "../../util/string-width"
 import { createGoal, GoalStatus } from "./goal"
 
@@ -12,11 +13,32 @@ const money = new Intl.NumberFormat("en-US", {
   currency: "USD",
 })
 
+export type AgentModeHint = {
+  /** The mode Tab switches to from the current agent. */
+  readonly target: string
+  /** The target agent's colour, so Build and Plan read differently. */
+  readonly color: RGBA
+}
+
+/** Resolves the Tab hint for the selected agent, or nothing when build/plan is unavailable. */
+export function useAgentModeHint() {
+  const local = useLocal()
+  return createMemo((): AgentModeHint | undefined => {
+    const current = local.agent.current()
+    if (!current) return
+    const target = current.id === "plan" ? "build" : "plan"
+    if (!local.agent.list().some((agent) => agent.id === target)) return
+    return { target, color: local.agent.color(target) }
+  })
+}
+
 export function PromptFooter(props: {
   context: Plugin.Context
   sessionID?: string
   mode: "normal" | "shell"
   showDetails: boolean
+  /** Resolved by the host, which owns the selected agent; absent in isolated renders. */
+  agent?: AgentModeHint
 }) {
   const dimensions = useTerminalDimensions()
   const [liveHovered, setLiveHovered] = createSignal(false)
@@ -54,13 +76,25 @@ export function PromptFooter(props: {
   // Prompt hints read as disabled while the session does not own input, e.g. while a side panel is focused.
   const interactive = useInteractivity()
   const shortcut = (id: string) => props.context.keymap.shortcuts(id)[0]
+  const modeHint = createMemo(() => {
+    const agent = props.agent
+    if (!agent) return
+    const key = shortcut("agent.mode.toggle")
+    if (!key) return
+    return { key, target: agent.target, color: agent.color }
+  })
   const layout = createMemo(() => {
     const command = shortcut("command.palette.show")
+    const hint = modeHint()
+    const shortcuts = [
+      hint ? `${hint.key} ${hint.target}` : undefined,
+      command ? `${command} commands` : undefined,
+    ].filter((value): value is string => value !== undefined)
     if (status().length === 0) return { usage: false, shortcuts: dimensions().width >= 44 }
     return promptFooterLayout({
       width: Math.max(0, dimensions().width - 8),
       usage: status(),
-      shortcuts: command ? [`${command} commands`] : [],
+      shortcuts,
     })
   })
 
@@ -104,17 +138,49 @@ export function PromptFooter(props: {
                   {status().join(" · ")}
                 </text>
               </Show>
+              <Show when={props.showDetails && layout().shortcuts && modeHint()}>
+                {(hint) => (
+                  <text
+                    fg={
+                      interactive() ? props.context.theme.text.base : props.context.theme.text.action.primary.disabled
+                    }
+                    attributes={interactive() ? 0 : TextAttributes.DIM}
+                    wrapMode="none"
+                    flexShrink={0}
+                  >
+                    <Show when={live() || goal() || status().length > 0}> · </Show>
+                    {hint().key} <span style={interactive() ? { fg: hint().color } : {}}>{hint().target}</span>
+                  </text>
+                )}
+              </Show>
             </box>
           </Match>
           <Match when={props.showDetails && layout().shortcuts}>
-            <text
-              fg={interactive() ? props.context.theme.text.base : props.context.theme.text.action.primary.disabled}
-              attributes={interactive() ? 0 : TextAttributes.DIM}
-              flexShrink={0}
-            >
-              {shortcut("agent.cycle")}{" "}
-              <span style={interactive() ? { fg: props.context.theme.text.muted } : {}}>agents</span>
-            </text>
+            <Switch>
+              <Match when={modeHint()}>
+                {(hint) => (
+                  <text
+                    fg={
+                      interactive() ? props.context.theme.text.base : props.context.theme.text.action.primary.disabled
+                    }
+                    attributes={interactive() ? 0 : TextAttributes.DIM}
+                    flexShrink={0}
+                  >
+                    {hint().key} <span style={interactive() ? { fg: hint().color } : {}}>{hint().target}</span>
+                  </text>
+                )}
+              </Match>
+              <Match when={true}>
+                <text
+                  fg={interactive() ? props.context.theme.text.base : props.context.theme.text.action.primary.disabled}
+                  attributes={interactive() ? 0 : TextAttributes.DIM}
+                  flexShrink={0}
+                >
+                  {shortcut("agent.cycle")}{" "}
+                  <span style={interactive() ? { fg: props.context.theme.text.muted } : {}}>agents</span>
+                </text>
+              </Match>
+            </Switch>
           </Match>
         </Switch>
         <Show when={props.showDetails && layout().shortcuts}>
@@ -146,9 +212,18 @@ export default Plugin.define({
   setup(context) {
     context.ui.slot({
       append: "prompt.footer",
-      render: (props) => (
-        <PromptFooter context={context} sessionID={props.sessionID} mode={props.mode} showDetails={props.showDetails} />
-      ),
+      render: (props) => {
+        const agent = useAgentModeHint()
+        return (
+          <PromptFooter
+            context={context}
+            sessionID={props.sessionID}
+            mode={props.mode}
+            showDetails={props.showDetails}
+            agent={agent()}
+          />
+        )
+      },
     })
   },
 })

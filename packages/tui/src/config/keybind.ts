@@ -175,6 +175,7 @@ export const Definitions = {
   "agent.list": keybind("<leader>a", "List agents"),
   "agent.cycle": keybind("shift+tab", "Next agent"),
   "agent.cycle.reverse": keybind("none", "Previous agent"),
+  "agent.mode.toggle": keybind("tab", "Toggle build and plan mode"),
   "variant.cycle": keybind("ctrl+t", "Cycle model variants"),
   "variant.list": keybind("none", "List model variants"),
 

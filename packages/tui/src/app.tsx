@@ -161,6 +161,7 @@ const appBindingCommands = [
   "usage.show",
   "agent.cycle",
   "agent.cycle.reverse",
+  "agent.mode.toggle",
   "variant.cycle",
   "variant.list",
   "provider.connect",
@@ -983,6 +984,15 @@ function App() {
         palette: undefined,
         run: () => {
           local.agent.move(1)
+        },
+      },
+      {
+        name: "agent.mode.toggle",
+        title: "Toggle build and plan mode",
+        category: "Agent",
+        palette: undefined,
+        run: () => {
+          local.agent.toggleMode()
         },
       },
       {

@@ -125,6 +125,15 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             this.set(value.id)
           })
         },
+        toggleMode() {
+          const current = this.current()
+          if (!current) return
+          // Only the build/plan pair has a mode toggle; another agent (for
+          // example orchestrator) enters plan mode.
+          const next = current.id === "plan" ? "build" : "plan"
+          if (!agents().some((agent) => agent.id === next)) return
+          this.set(next)
+        },
         color(id: string) {
           const index = visibleAgents().findIndex((agent) => agent.id === id)
           if (index === -1) return colors()[0]

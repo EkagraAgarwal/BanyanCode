@@ -8,7 +8,7 @@ import { useExit } from "../../context/exit"
 import { useTheme } from "../../context/theme"
 import { InteractivityProvider } from "../../context/interactivity"
 import { FadeInText } from "../../component/fade-in-text"
-import { PromptFooter } from "../prompt/footer"
+import { PromptFooter, useAgentModeHint } from "../prompt/footer"
 
 /**
  * The prompt hints are the first thing the footer row drops: with a typical
@@ -169,6 +169,7 @@ function UpdateNotice() {
 function View(props: { context: Plugin.Context }) {
   const dimensions = useTerminalDimensions()
   const visibility = createMemo(() => homeFooterVisibility(dimensions().width))
+  const agent = useAgentModeHint()
 
   return (
     <Show when={dimensions().height >= 14 && dimensions().width >= 44}>
@@ -195,7 +196,7 @@ function View(props: { context: Plugin.Context }) {
             when it does not. */}
         <Show when={dimensions().width >= HINTS_MIN_WIDTH}>
           <InteractivityProvider enabled={true}>
-            <PromptFooter context={props.context} mode="normal" showDetails />
+            <PromptFooter context={props.context} mode="normal" showDetails agent={agent()} />
           </InteractivityProvider>
         </Show>
         <Show when={visibility().compactHint}>

@@ -16,6 +16,8 @@ import type { Info } from "../config/schema.js"
 // weakened: ConfigPolicyPlugin registers after the built-ins and re-applies its
 // deny, so a matching policy statement still wins.
 
+const READ_ONLY_AGENTS: ReadonlySet<string> = new Set(["plan", "explore", "scout", "reviewer"])
+
 export interface YoloDeps {
   readonly config: BanyanConfig.Interface
 }
@@ -30,6 +32,8 @@ export const register = (ctx: Context, deps: YoloDeps): Effect.Effect<void, neve
   Effect.gen(function* () {
     yield* ctx.permission.hook("evaluate", (event) =>
       Effect.gen(function* () {
+        // Yolo removes prompts; it must not turn a read-only agent into a writing one.
+        if (event.agent !== undefined && READ_ONLY_AGENTS.has(event.agent)) return
         const loaded = yield* deps.config.get()
         if (!yoloEnabled(loaded.config)) return
         event.effect = "allow"

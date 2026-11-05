@@ -31,6 +31,18 @@ describe("yolo permission hook", () => {
     })
   })
 
+  test.each(["plan", "explore", "scout", "reviewer"])("yolo keeps the %s agent read-only", async (agent) => {
+    await withTemp(async (directory) => {
+      const harness = await setup(directory, { banyancode_yolo_mode: true })
+      const deny = { ...evaluate("deny"), agent, action: "edit", resources: ["src/app.ts"] }
+      await Effect.runPromise(callHook(harness.permission.get("evaluate"), deny))
+      expect(deny.effect).toBe("deny")
+      const ask = { ...evaluate("ask"), agent }
+      await Effect.runPromise(callHook(harness.permission.get("evaluate"), ask))
+      expect(ask.effect).toBe("ask")
+    })
+  })
+
   test("without yolo the evaluated effect is untouched", async () => {
     await withTemp(async (directory) => {
       const harness = await setup(directory, {})
