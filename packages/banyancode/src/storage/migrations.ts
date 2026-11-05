@@ -236,9 +236,10 @@ export const migrations: readonly Migration[] = [
     ],
   },
   {
-    // The FTS update trigger fired on every column, so refreshing `in_degree` after a
-    // build re-indexed each touched node's code: 42s of an 83s main-thread block on a
-    // 100k-node graph. Only the indexed columns need to reach the FTS table.
+    // An unscoped UPDATE trigger re-tokenized a node's whole body twice for any
+    // column, so recomputing in_degree, which FTS doesn't index, rewrote the
+    // trigram index for every node: 22 s of a full build and a third of the
+    // database file. Only the indexed columns may fire it.
     id: "20261105000200_fts_update_indexed_columns",
     statements: [
       `DROP TRIGGER IF EXISTS codegraph_nodes_fts_update`,
