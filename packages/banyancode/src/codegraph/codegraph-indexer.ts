@@ -30,7 +30,6 @@ const PY_LIKE_EXTS = new Set([".py", ".pyw"])
 const IMPORT_BINDING_REGEX =
   /import\s+(?:type\s+)?(?:(\{[^}]*\})|(\*\s+as\s+([A-Za-z_$][\w$]*))|([A-Za-z_$][\w$]*))?\s*from\s*["'][^"']+["']/g
 const IMPORT_PART_REGEX = /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/
-const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
 // Phase 3 entrypoint heuristic — kept here (not in repository-intelligence)
 // because it must run during the parse pass so the column lands in the DB
@@ -154,6 +153,17 @@ export interface Interface {
 // don't let I/O run, so a long build froze every client and could not even receive its cancel. Each long loop gives
 // the event loop a macrotask turn once it has held the thread for this long; the sleep is also where a cancel lands.
 const THREAD_BUDGET_MS = 25
+// A full build dirties far more pages than SQLite's defaults hold: the 2 MB page
+// cache spills mid-transaction and the 4 MB WAL threshold checkpoints (and syncs)
+// every few commits. Both are per-connection and vanish with it, so a crash
+// leaves nothing to undo. The restored values are SQLite's own defaults, which
+// is also what openDatabase leaves in place.
+const BULK_CACHE_KIB = Number(process.env.BANYANCODE_INDEX_CACHE_KIB ?? 16_384)
+const BULK_WAL_PAGES = Number(process.env.BANYANCODE_INDEX_WAL_PAGES ?? 25_600)
+const DEFAULT_CACHE_KIB = 2_000
+const DEFAULT_WAL_PAGES = 1_000
+const DERIVED_WRITE_CHUNK = 2_000
+const IN_DEGREE_CHUNK = 900
 let threadHeldSince = performance.now()
 const threadOverBudget = () => performance.now() - threadHeldSince > THREAD_BUDGET_MS
 const yieldThread = Effect.callback<void>((resume) => {
@@ -165,7 +175,7 @@ const yieldThread = Effect.callback<void>((resume) => {
 })
 
 export const PARSED_QUEUE_CAPACITY = 128
-export const PERSIST_BATCH_DEFAULT = 25
+export const PERSIST_BATCH_DEFAULT = 10
 export const PARSE_CONCURRENCY_DEFAULT = 8
 export const PARSE_CONCURRENCY_MAX = 32
 
@@ -231,6 +241,16 @@ export interface IndexProfile {
   sqliteWriteMs: number
   /** Derived-edge resolution: DB reads, scope building, edge generation, writes. */
   edgeResolveMs: number
+  /** Where `edgeResolveMs` went, one bucket per sub-phase. */
+  derived: {
+    loadMs: number
+    importScopeMs: number
+    referenceScanMs: number
+    crossEdgeMs: number
+    deleteMs: number
+    insertMs: number
+    inDegreeMs: number
+  }
   /** `PRAGMA wal_checkpoint` calls. */
   checkpointMs: number
   /** Orphan-file pruning. */
@@ -257,6 +277,7 @@ export const makeProfile = (): IndexProfile => ({
   parseMs: 0,
   sqliteWriteMs: 0,
   edgeResolveMs: 0,
+  derived: { loadMs: 0, importScopeMs: 0, referenceScanMs: 0, crossEdgeMs: 0, deleteMs: 0, insertMs: 0, inDegreeMs: 0 },
   checkpointMs: 0,
   pruneMs: 0,
   bumpMs: 0,
@@ -1130,9 +1151,16 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   changedFileIDs: string[] | undefined,
   additionalSourceFileIDs?: readonly string[],
   parserState?: { fileIDs: ReadonlySet<string>; preserveEdgeIDs: ReadonlySet<string> },
+  profile?: IndexProfile,
 ) {
   const isCancelled = yield* Ref.get(cancelled)
   if (isCancelled) return
+  const markStart = { at: performance.now() }
+  const mark = (bucket: keyof IndexProfile["derived"]) => {
+    const now = performance.now()
+    if (profile?.enabled) profile.derived[bucket] += now - markStart.at
+    markStart.at = now
+  }
 
   const changedSet = changedFileIDs && changedFileIDs.length > 0 ? new Set(changedFileIDs) : null
   const sourceFileIDs = new Set<string>([
@@ -1233,6 +1261,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       .filter((file): file is CodegraphFile => file !== undefined)
   }
 
+  mark("loadMs")
   const referenceEdges: { fromNodeID: string; toNodeID: string; kind: "imports" | "calls" | "extends" | "references" }[] = []
   const crossEdges: { fromNodeID: string; toNodeID: string; kind: CodegraphEdge["kind"] }[] = []
   const referenceEdgeKeys = new Set<string>()
@@ -1308,40 +1337,40 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }
     importScopesByFileID.set(fileID, scope)
   }
+  mark("importScopeMs")
 
-  for (const nodeA of allNodesForIndex) {
-    if (threadOverBudget()) yield* yieldThread
-    if (
-      !nodeA.code ||
-      nodeA.kind === "test" ||
-      nodeA.kind === "route" ||
-      nodeA.kind === "config" ||
-      nodeA.kind === "build" ||
-      nodeA.kind === "package" ||
-      nodeA.kind === "generated" ||
-      nodeA.kind === "ci" ||
-      nodeA.kind === "docker" ||
-      nodeA.kind === "env" ||
-      nodeA.kind === "doc" ||
-      nodeA.kind === "file"
-    ) {
-      continue
-    }
+  for (const [sourceFileID, fileNodes] of nodesByFileID) {
+    // Incremental: skip the file if it is neither changed nor a dependent source
+    if (sourceSet && !sourceSet.has(sourceFileID)) continue
+    const sources = fileNodes.filter(
+      (node) =>
+        node.code &&
+        node.kind !== "test" &&
+        node.kind !== "route" &&
+        node.kind !== "config" &&
+        node.kind !== "build" &&
+        node.kind !== "package" &&
+        node.kind !== "generated" &&
+        node.kind !== "ci" &&
+        node.kind !== "docker" &&
+        node.kind !== "env" &&
+        node.kind !== "doc" &&
+        node.kind !== "file",
+    )
+    if (sources.length === 0) continue
 
-    // Incremental: skip nodeA if its file is neither changed nor a dependent source
-    if (sourceSet && !sourceSet.has(nodeA.fileID)) continue
-
+    // Scope depends only on the file, so it is built once per file rather than
+    // once per node.
     const inScopeNodeIDs = new Set<string>()
-    const sameFileNodes = nodesByFileID.get(nodeA.fileID) ?? []
-    for (const n of sameFileNodes) {
+    for (const n of fileNodes) {
       if (n.kind !== "file") inScopeNodeIDs.add(n.id)
     }
-    const importedScope = importScopesByFileID.get(nodeA.fileID)
+    const importedScope = importScopesByFileID.get(sourceFileID)
     if (importedScope) {
       for (const importedID of importedScope) inScopeNodeIDs.add(importedID)
     }
     if (!importedScope || importedScope.size === 0) {
-      const owner = fileByID.get(nodeA.fileID)
+      const owner = fileByID.get(sourceFileID)
       if (owner) {
         const ownerDir = fileDir(owner.path)
         const peers = filesByDir.get(ownerDir) ?? []
@@ -1360,7 +1389,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     // defines its own `configured`/`match`/`merge` while importing a module
     // with the same name produced a bogus cross-file edge to the imported
     // symbol (`Config.configured` had 12 callers, 1 real).
-    const sameFileIDs = new Set(sameFileNodes.map((node) => node.id))
+    const sameFileIDs = new Set(fileNodes.map((node) => node.id))
     const localByName = new Map<string, CodegraphNode[]>()
     const importedByName = new Map<string, CodegraphNode[]>()
     for (const nodeID of inScopeNodeIDs) {
@@ -1371,69 +1400,81 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       scoped.push(scopedNode)
       target.set(scopedNode.name, scoped)
     }
-    // Phase 5 (P8b): strip comment and string-literal regions BEFORE the
-    // identifier scan and kind classification so a comment mentioning a
-    // symbol or a string like `"callBash("` cannot fabricate a
-    // `references`/`calls` edge. The original `nodeA.code` stays on the
-    // node unchanged — the strip is only for edge classification.
-    const strippedCode = stripCommentsAndStrings(nodeA.code)
-    const bindings = importBindingsByFileID.get(nodeA.fileID)
-    const callNames = new Set<string>()
-    for (const m of strippedCode.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) callNames.add(m[1]!)
-    const identifiers = new Set<string>()
-    for (const m of strippedCode.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
-      const name = m[0]
-      if (name.length < 3) continue
-      // Cross-file edges only for names this file imports or calls, plus
-      // declarations in this file. A local variable that happens to share a
-      // name with an imported module's symbol (every `const configured = …`
-      // in a file that imports config.ts) is not a reference to it.
-      if (callNames.has(name) || bindings?.has(name) || localByName.has(name)) identifiers.add(name)
-    }
 
-    for (const name of identifiers) {
-      const importedName = bindings?.get(name) ?? name
-      // `Ns.member` is a namespaced call only when `Ns` is an imported
-      // binding; `input.match(...)` on a string is not a call to an imported
-      // `match`. A receiver that is not imported falls back to the same-file
-      // declaration (JavaScript shadowing) instead of the module's symbol.
-      const receiver = new RegExp(`([A-Za-z_$][\\w$]*)\\s*\\.\\s*${escapeRegExp(name)}\\b`).exec(strippedCode)
-      const namespaced = receiver !== null && bindings?.has(receiver[1]!) === true
-      const targets = namespaced
-        ? importedByName.get(importedName) ?? importedByName.get(name) ?? localByName.get(name)
-        : localByName.get(name) ?? importedByName.get(importedName) ?? importedByName.get(name)
-      if (!targets || targets.length === 0) continue
+    for (const nodeA of sources) {
+      if (threadOverBudget()) yield* yieldThread
+      // Phase 5 (P8b): strip comment and string-literal regions BEFORE the
+      // identifier scan and kind classification so a comment mentioning a
+      // symbol or a string like `"callBash("` cannot fabricate a
+      // `references`/`calls` edge. The original `nodeA.code` stays on the
+      // node unchanged — the strip is only for edge classification.
+      const strippedCode = stripCommentsAndStrings(nodeA.code!)
+      const bindings = importBindingsByFileID.get(nodeA.fileID)
+      // `Ns.member` is a namespaced call only when `Ns` is an imported binding;
+      // `input.match(...)` on a string is not a call to an imported `match`. One
+      // pass records each member's leftmost receiver. The lookahead leaves the
+      // member unconsumed so `a.b.c` still sees `b` as the receiver of `c`.
+      const receiverByMember = new Map<string, string>()
+      for (const m of strippedCode.matchAll(/([A-Za-z_$][\w$]*)\s*\.\s*(?=([A-Za-z_][A-Za-z0-9_]*)\b)/g)) {
+        if (!receiverByMember.has(m[2]!)) receiverByMember.set(m[2]!, m[1]!)
+      }
+      const callNames = new Set<string>()
+      for (const m of strippedCode.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) callNames.add(m[1]!)
+      const identifiers = new Set<string>()
+      for (const m of strippedCode.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
+        const name = m[0]
+        if (name.length < 3) continue
+        // Cross-file edges only for names this file imports or calls, plus
+        // declarations in this file. A local variable that happens to share a
+        // name with an imported module's symbol (every `const configured = …`
+        // in a file that imports config.ts) is not a reference to it.
+        if (callNames.has(name) || bindings?.has(name) || localByName.has(name)) identifiers.add(name)
+      }
 
-      for (const nodeB of targets) {
-        if (nodeB.id === nodeA.id) continue
-        // A function's own name (including overload signatures extracted as
-        // separate nodes) appears in its declaration, not in a call site.
-        if (nodeA.name === name && nodeA.fileID === nodeB.fileID) continue
+      for (const name of identifiers) {
+        const importedName = bindings?.get(name) ?? name
+        // A receiver that is not imported falls back to the same-file declaration
+        // (JavaScript shadowing) instead of the module's symbol.
+        const receiver = receiverByMember.get(name)
+        const namespaced = receiver !== undefined && bindings?.has(receiver) === true
+        const targets = namespaced
+          ? importedByName.get(importedName) ?? importedByName.get(name) ?? localByName.get(name)
+          : localByName.get(name) ?? importedByName.get(importedName) ?? importedByName.get(name)
+        if (!targets || targets.length === 0) continue
 
-        const kind =
-          nodeA.kind === "class" && strippedCode.includes(`extends ${name}`)
-            ? ("extends" as const)
-            : callNames.has(name)
-              ? ("calls" as const)
-              : ("references" as const)
+        for (const nodeB of targets) {
+          if (nodeB.id === nodeA.id) continue
+          // A function's own name (including overload signatures extracted as
+          // separate nodes) appears in its declaration, not in a call site.
+          if (nodeA.name === name && nodeA.fileID === nodeB.fileID) continue
 
-        // Phase 0 tree-sitter (parser mode): the tree-sitter query pass owns
-        // `calls` edges for tree-sitter-parsed files — skip regenerating
-        // them so the parser-emitted edges survive unchanged. references /
-        // extends stay derived for those files.
-        if (kind === "calls" && parserState?.fileIDs.has(nodeA.fileID)) continue
+          const kind =
+            nodeA.kind === "class" && strippedCode.includes(`extends ${name}`)
+              ? ("extends" as const)
+              : callNames.has(name)
+                ? ("calls" as const)
+                : ("references" as const)
 
-        const key = `${nodeA.id}->${nodeB.id}:${kind}`
-        if (referenceEdgeKeys.has(key)) continue
-        referenceEdgeKeys.add(key)
-        referenceEdges.push({
-          fromNodeID: nodeA.id,
-          toNodeID: nodeB.id,
-          kind,
-        })
+          // Phase 0 tree-sitter (parser mode): the tree-sitter query pass owns
+          // `calls` edges for tree-sitter-parsed files — skip regenerating
+          // them so the parser-emitted edges survive unchanged. references /
+          // extends stay derived for those files.
+          if (kind === "calls" && parserState?.fileIDs.has(nodeA.fileID)) continue
+
+          const key = `${nodeA.id}->${nodeB.id}:${kind}`
+          if (referenceEdgeKeys.has(key)) continue
+          referenceEdgeKeys.add(key)
+          referenceEdges.push({
+            fromNodeID: nodeA.id,
+            toNodeID: nodeB.id,
+            kind,
+          })
+        }
       }
     }
   }
+
+  mark("referenceScanMs")
 
   // Filter node lists by file set for crossEdges that are scope-limited to changed/dependent files.
   // In incremental mode, changed and dependent source files are processed.
@@ -1573,6 +1614,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       kind: e.kind,
     })),
   ]
+  mark("crossEdgeMs")
   const touchedNodeIDs = new Set<string>()
   for (const edge of edgesToWrite) {
     if (threadOverBudget()) yield* yieldThread
@@ -1599,17 +1641,27 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     const deletedTouchedFull = yield* repo.deleteAllDerivedEdges(parserState?.preserveEdgeIDs)
     for (const nodeID of deletedTouchedFull) touchedNodeIDs.add(nodeID)
   }
-  if (edgesToWrite.length > 0) {
-    yield* repo.putEdges(edgesToWrite)
+  mark("deleteMs")
+  // SQLite calls block the thread that serves the host's API, so neither of these
+  // may run as one long stretch.
+  for (let start = 0; start < edgesToWrite.length; start += DERIVED_WRITE_CHUNK) {
+    if (threadOverBudget()) yield* yieldThread
+    yield* repo.putEdges(edgesToWrite.slice(start, start + DERIVED_WRITE_CHUNK))
   }
+  mark("insertMs")
   if (touchedNodeIDs.size > 0) {
-    yield* repo.recomputeInDegree({ nodeIDs: [...touchedNodeIDs] }).pipe(Effect.orDie)
+    const touched = [...touchedNodeIDs]
+    for (let start = 0; start < touched.length; start += IN_DEGREE_CHUNK) {
+      if (threadOverBudget()) yield* yieldThread
+      yield* repo.recomputeInDegree({ nodeIDs: touched.slice(start, start + IN_DEGREE_CHUNK) }).pipe(Effect.orDie)
+    }
   } else if (!changedSet) {
     // Full-rebuild purge may have driven in-degree to zero on many nodes that
     // were never re-touched by the new derived pass. Recompute over the whole
     // graph so downstream readers see accurate ranker scores.
     yield* repo.recomputeInDegree().pipe(Effect.orDie)
   }
+  mark("inDegreeMs")
 })
 
     const index = Effect.fn("CodegraphIndexer.index")(function* (input: {
@@ -1719,7 +1771,10 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           const writeStart = performance.now()
           // One transaction per persist batch instead of one per file. The
           // profile put the per-file commit at ~9.5ms of SQLite time per file
-          // on a 5.6k-file monorepo; batching turns 5.6k commits into ~220.
+          // on a 5.6k-file monorepo; batching turns 5.6k commits into ~550. Commits are
+          // cheap with the bulk WAL threshold, so the batch is sized for how long one
+          // flush holds the thread: 25 files stalled clients over 100 ms on almost
+          // every flush and cost no less wall time than 10.
           yield* repo.writeFileGraphs(pending.map((parsed) => ({
             file: parsed.file,
             nodes: parsed.nodes,
@@ -1762,6 +1817,9 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
             ),
           )
           if (profile.enabled) profile.sqliteWriteMs += performance.now() - writeStart
+          // Queue.take doesn't suspend while parsed files are waiting, so without
+          // this a busy drain never lets I/O run between flushes.
+          if (threadOverBudget()) yield* yieldThread
         })
         while (processed < total) {
           const parsed = yield* Queue.take(parsedQueue)
@@ -1773,9 +1831,6 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
             yield* Ref.update(symbolsIndexedRef, (n) => n + parsed.nodes.length)
           }
           if (batch.length >= persistBatch) yield* flushBatch
-          if (processed % CHECKPOINT_EVERY === 0) {
-            yield* storage.exec("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
-          }
         }
         if (batch.length > 0) yield* flushBatch
       })
@@ -2002,7 +2057,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
             }
           : undefined
         const edgeStart = performance.now()
-        yield* rebuildDerivedGraph(undefined, undefined, parserState)
+        yield* rebuildDerivedGraph(undefined, undefined, parserState, profile)
         if (profile.enabled) profile.edgeResolveMs += performance.now() - edgeStart
       }
       yield* Ref.get(skippedRef)
@@ -2097,7 +2152,22 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         backend,
         parseErrors: parseErrors.slice(0, 50),
       }
-    })
+    },
+    (build) =>
+      Effect.acquireUseRelease(
+        storage
+          .exec(`PRAGMA cache_size = -${BULK_CACHE_KIB}; PRAGMA wal_autocheckpoint = ${BULK_WAL_PAGES}`)
+          .pipe(Effect.ignore),
+        () => build,
+        () =>
+          storage
+            .exec(
+              `PRAGMA wal_checkpoint(TRUNCATE); PRAGMA wal_autocheckpoint = ${DEFAULT_WAL_PAGES}; ` +
+                `PRAGMA cache_size = -${DEFAULT_CACHE_KIB}; PRAGMA shrink_memory`,
+            )
+            .pipe(Effect.ignore),
+      ),
+    )
 
     const cancel = Effect.fn("CodegraphIndexer.cancel")(function* () {
       yield* Ref.set(cancelled, true)
