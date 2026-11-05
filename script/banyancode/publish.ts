@@ -29,6 +29,7 @@ const flag = (name: string): string | undefined => {
   return next !== undefined && !next.startsWith("--") ? next : undefined
 }
 const dryRun = args.includes("--dry-run")
+const PUBLISH_CONCURRENCY = 4
 const repo = path.resolve(import.meta.dir, "../..")
 const dist = path.resolve(flag("dist") ?? path.join(repo, "packages", "cli", "dist"))
 const staging = path.join(dist, "npm-staging")
@@ -93,8 +94,28 @@ await rm(work, { recursive: true, force: true })
 await mkdir(work, { recursive: true })
 
 const rows: Array<{ name: string; version: string; files: number; bytes: number; tag: string }> = []
-for (const entry of manifests) {
-  const archive = await pack(entry.directory, work)
+// Each platform package is ~100 MB, so packing and uploading them one at a time took
+// most of the publish job. They are independent; only the umbrella has to wait,
+// because it must never point at a platform package that failed to publish.
+const platforms = manifests.filter((entry) => entry !== umbrella)
+const queue = [...platforms]
+const outcomes = await Promise.allSettled(
+  Array.from({ length: Math.min(PUBLISH_CONCURRENCY, queue.length) }, async () => {
+    for (let entry = queue.shift(); entry !== undefined; entry = queue.shift()) await release(entry)
+  }),
+)
+const failures = outcomes.flatMap((outcome) => (outcome.status === "rejected" ? [outcome.reason] : []))
+if (failures.length > 0) {
+  for (const failure of failures) console.error(failure)
+  throw new Error(`${failures.length} platform package(s) failed; the umbrella was not published. Re-run to fill the gaps.`)
+}
+await release(umbrella)
+
+async function release(entry: (typeof manifests)[number]) {
+  // pack() finds its tarball by listing the destination, so parallel packs each get their own.
+  const destination = path.join(work, entry.name)
+  await mkdir(destination, { recursive: true })
+  const archive = await pack(entry.directory, destination)
   const files = await listTarball(archive)
   if (files.length === 0) throw new Error(`${entry.name}: npm pack produced an empty tarball`)
   const leaked = files.filter((file) => file.includes("node_modules/") || file.endsWith(".map"))
@@ -109,7 +130,7 @@ for (const entry of manifests) {
   rows.push({ name: entry.name, version: String(entry.manifest.version), files: files.length, bytes, tag: channel })
   if (dryRun) {
     console.log(`  ok ${entry.name}@${entry.manifest.version} (${files.length} files, ${(bytes / 1024 / 1024).toFixed(1)} MB)`)
-    continue
+    return
   }
   await publish(entry, archive)
 }

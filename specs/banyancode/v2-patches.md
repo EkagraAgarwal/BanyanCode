@@ -46,7 +46,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/cli/src/config/config.ts` | hook | BANYANCODE_TUI_CONFIG overlays cli.json | — |
 | `packages/core/src/snapshot.ts` | fix | capture time budget, so a huge worktree can't stall a session | — |
 | `packages/core/test/snapshot.test.ts` | fix | covers the capture time budget | — |
-| `.husky/pre-push` | fix | unset GIT_DIR so turbo doesn't stall in a linked worktree; check the ledger | — |
+| `.husky/pre-push` | fix | unset GIT_DIR so turbo doesn't stall in a linked worktree; check the ledger; skip the full check for tag-only pushes | — |
 | `packages/cli/src/commands/handlers/debug/config.ts` | hook | shows BanyanCode config warnings | — |
 | `packages/cli/src/commands/handlers/session/import.ts` | fix | one-line message for a bad import file | — |
 | `packages/cli/src/framework/error.ts` | fix | one-line errors; stacks behind a debug flag | — |

@@ -1,5 +1,15 @@
 #!/bin/sh
 set -e
+# A tag-only push (a release or dev canary) points at commits that were checked when
+# their branch was pushed, and the full check costs minutes. Git lists the refs on stdin.
+tags_only=1
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/tags/*) ;;
+    *) tags_only=0 ;;
+  esac
+done
+if [ "$tags_only" = 1 ]; then exit 0; fi
 # Check if bun version matches package.json
 # keep in sync with packages/script/src/index.ts semver qualifier
 bun -e '

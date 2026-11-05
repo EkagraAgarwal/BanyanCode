@@ -155,8 +155,9 @@ jobs:
         with:
           bun-version: "1.4.4"
           # The build plugin resolves per-platform native packages for the
-          # cross-compiled targets (musl, arm64), so install every variant, libc included.
-          install-flags: '--os="*" --cpu="*" --libc="*"'
+          # cross-compiled targets (musl, arm64). Each runner only builds its own OS,
+          # so other operating systems' binaries are skipped to shorten the install.
+          install-flags: ${{ runner.os == 'Windows' && '--os=win32 --cpu="*"' || runner.os == 'macOS' && '--os=darwin --cpu="*"' || '--os=linux --cpu="*" --libc="*"' }}
 
       # The codegraph indexer prefers a native sidecar and falls back to the
       # TypeScript parsers without one. build.ts builds it for the matrix target
@@ -397,10 +398,13 @@ jobs:
           name: ${{ needs.sign-windows.outputs.artifact-name }}
           path: packages/cli/dist/cli-windows-x64
 
+      # dev canaries get no GitHub release, so building its archives only cost time.
       - name: Stage npm packages and release archives
-        run: bun script/banyancode/pack.ts --all --version="$VERSION"
+        run: bun script/banyancode/pack.ts --all --version="$VERSION" ${{ needs.version.outputs.channel == 'dev' && '--no-archives' || '' }}
 
+      # A real publish runs the same tarball checks before each upload.
       - name: Inspect the npm tarballs (no publish)
+        if: env.DRY_RUN == 'true'
         run: bun script/banyancode/publish.ts --dry-run --require-all --version="$VERSION"
 
       - name: Create draft GitHub release
