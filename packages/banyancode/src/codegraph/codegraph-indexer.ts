@@ -9,7 +9,7 @@ import { fs } from "./fs.js"
 import type { DirEntry } from "./fs.js"
 import type { CodegraphEdge, CodegraphFile, CodegraphNode, CodegraphNodeKind } from "./types.js"
 import { getParserForPath, TREE_SITTER_WALK_EXTENSIONS } from "./langs/registry.js"
-import type { ParseResult } from "./langs/types.js"
+import type { ParseResult, ParsedEdge } from "./langs/types.js"
 import { parseTypeScript, stripCommentsAndStrings } from "./langs/typescript.js"
 import { parsePython } from "./langs/python.js"
 import {
@@ -19,6 +19,7 @@ import {
   parseTypeScriptWithTreeSitter,
 } from "./langs/query-executor.js"
 import { ensureWebTreeSitterReady } from "./langs/tree-sitter.js"
+import { resolveNativeIndexerPath, runNativeIndex, type NativeFileResult } from "./langs/native.js"
 import { extractTestFileImports } from "./codegraph-helpers.js"
 
 const TS_LIKE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"])
@@ -104,6 +105,8 @@ export interface Interface {
         readError: number
         parseFailure: number
       }
+      /** Which parser produced this build. `typescript` also means "fell back". */
+      backend: "native" | "typescript"
       parseErrors: Array<{ path: string; cause: string; indexedAt: number }>
     },
     CodegraphError,
@@ -205,6 +208,73 @@ export function* streamCandidateBatches<T>(candidates: readonly T[], batchSize: 
   for (let i = 0; i < candidates.length; i += size) {
     yield candidates.slice(i, i + size)
   }
+}
+
+// Opt-in phase profiling. `BANYANCODE_INDEX_PROFILE=<path>` accumulates
+// per-phase wall time and peak RSS for one build and writes a JSON report at
+// the end. Off by default: the accumulator is a plain mutable object, so the
+// disabled path costs one boolean check per instrumented site.
+//
+// Times are ACCUMULATED across the parse/persist fibers (the producer pool
+// runs `resolveParseConcurrency()` parses at once), so with the default
+// concurrency the parse total exceeds the build's wall time. Run with
+// BANYANCODE_INDEX_CONCURRENCY=1 for non-overlapping attribution.
+export interface IndexProfile {
+  readonly enabled: boolean
+  /** Directories walked + ignore rules evaluated (whole recursive walk). */
+  walkMs: number
+  /** Reading file bytes. */
+  readMs: number
+  /** tree-sitter/regex parse + node/edge extraction. */
+  parseMs: number
+  /** `writeFileGraph` SQLite transactions (drain side). */
+  sqliteWriteMs: number
+  /** Derived-edge resolution: DB reads, scope building, edge generation, writes. */
+  edgeResolveMs: number
+  /** `PRAGMA wal_checkpoint` calls. */
+  checkpointMs: number
+  /** Orphan-file pruning. */
+  pruneMs: number
+  /** Batched `indexed_at` refresh for cached files. */
+  bumpMs: number
+  peakRssBytes: number
+  baselineRssBytes: number
+  filesIndexed: number
+  totalMs: number
+  /**
+   * The sidecar's own phase timings, when the native backend ran. These are
+   * reported by the child, so they are the only honest attribution for work
+   * that happens outside this process.
+   */
+  nativeTimings?: { walkMs: number; readMs: number; hashMs: number; parseMs: number; totalMs: number }
+  backend?: "native" | "typescript"
+}
+
+export const makeProfile = (): IndexProfile => ({
+  enabled: process.env.BANYANCODE_INDEX_PROFILE !== undefined,
+  walkMs: 0,
+  readMs: 0,
+  parseMs: 0,
+  sqliteWriteMs: 0,
+  edgeResolveMs: 0,
+  checkpointMs: 0,
+  pruneMs: 0,
+  bumpMs: 0,
+  peakRssBytes: process.memoryUsage().rss,
+  baselineRssBytes: process.memoryUsage().rss,
+  filesIndexed: 0,
+  totalMs: 0,
+})
+
+// Peak-RSS sampler. `unref` so the profiler can never keep the process alive.
+const startRssSampler = (profile: IndexProfile): (() => void) => {
+  if (!profile.enabled) return () => {}
+  const timer = setInterval(() => {
+    const rss = process.memoryUsage().rss
+    if (rss > profile.peakRssBytes) profile.peakRssBytes = rss
+  }, 50)
+  timer.unref()
+  return () => clearInterval(timer)
 }
 
 const DEFAULT_IGNORED = [
@@ -576,6 +646,194 @@ type WalkResult = {
   skippedByBanyanignore: number
 }
 
+// Graph shaping shared by both parse backends. Everything below is
+// indexer-owned: the file-level node, the artifact node, the entrypoint flag,
+// node derivation and the parser-edge endpoint remapping. The parser only
+// supplies symbol nodes + edges, so both backends funnel through here or the
+// graph changes meaning when the backend flips.
+const buildFileGraph = (spec: {
+  fileID: string
+  filePath: string
+  relativePath: string
+  contentHash: string
+  language: string
+  sizeBytes: number
+  mtimeMs: number
+  lineCount: number
+  fileCode: string
+  fileKind: CodegraphNodeKind | undefined
+  result: ParseResult
+  backend: "regex" | "tree-sitter"
+  edgeMode: "derived" | "parser"
+  parserFileIDsRef: Ref.Ref<Set<string>>
+  parserEdgeIDsRef: Ref.Ref<Set<string>>
+  previousFileID?: string
+}): Effect.Effect<ParsedFile, never, never> =>
+  Effect.gen(function* () {
+    const { fileID, filePath, relativePath, fileCode, lineCount } = spec
+    const file: CodegraphFile = {
+      id: fileID,
+      path: filePath,
+      contentHash: spec.contentHash,
+      language: spec.language,
+      indexedAt: Date.now(),
+      sizeBytes: spec.sizeBytes,
+      mtimeMs: spec.mtimeMs,
+    }
+    const fileLevelNode: CodegraphNode = {
+      id: `${fileID}:file`,
+      fileID,
+      kind: "file",
+      name: path.basename(filePath),
+      signature: relativePath,
+      startLine: 1,
+      endLine: lineCount,
+      code: fileCode,
+      // Phase 0 tree-sitter: the file-level node is indexer-owned, so it
+      // keeps the regex-v1 derivation even when symbol nodes below come
+      // from the tree-sitter path.
+      derivation: "regex-v1",
+    }
+    // Phase 0 tree-sitter: symbol nodes produced by the tree-sitter path get
+    // "tree-sitter-v1" (nodes themselves are still regex-extracted today);
+    // regex fallback (wasm unavailable / exception) stays "regex-v1".
+    const nodeDerivation: CodegraphNode["derivation"] =
+      spec.backend === "tree-sitter" ? "tree-sitter-v1" : "regex-v1"
+    const nodes: CodegraphNode[] = [
+      fileLevelNode,
+      ...spec.result.nodes.map((n) => {
+        const node: CodegraphNode = {
+          id: n.id,
+          fileID,
+          kind: n.kind,
+          name: n.name,
+          signature: n.signature,
+          startLine: n.startLine,
+          endLine: n.endLine,
+          code: n.code,
+          derivation: nodeDerivation,
+        }
+        return Object.assign(node, {
+          isEntrypoint: isEntrypointNode(node, filePath) ? 1 : 0,
+        }) as CodegraphNode
+      }),
+    ]
+
+    const knownNodeIDs = new Set(nodes.map((n) => n.id))
+    const parserMode = spec.edgeMode === "parser"
+    // Phase 0 tree-sitter (parser mode): resolve a parser-edge endpoint to a
+    // real node id. codegraph_edges FK-enforces both endpoints onto
+    // codegraph_nodes, so symbolic parser targets (`symbol:X`, `service:X`)
+    // and line-only sources (`<fileID>:function:<line>`) must be remapped to
+    // nodes in THIS file or the edge cannot be stored.
+    const nodeIdsByKindLine = new Map<string, Map<number, string>>()
+    const nodeIdsByName = new Map<string, string[]>()
+    for (const n of spec.result.nodes) {
+      let byLine = nodeIdsByKindLine.get(n.kind)
+      if (!byLine) {
+        byLine = new Map()
+        nodeIdsByKindLine.set(n.kind, byLine)
+      }
+      byLine.set(n.startLine, n.id)
+      const byName = nodeIdsByName.get(n.name) ?? []
+      byName.push(n.id)
+      nodeIdsByName.set(n.name, byName)
+    }
+    const resolveParserEndpoint = (endpoint: string): string | null => {
+      if (knownNodeIDs.has(endpoint)) return endpoint
+      const kindLine = /^[^:]+:(function|method|class|variable|type):(\d+)$/.exec(endpoint)
+      if (kindLine) {
+        const byLine = nodeIdsByKindLine.get(kindLine[1]!)
+        if (byLine) {
+          const line = Number(kindLine[2])
+          const resolved = byLine.get(line)
+          if (resolved) return resolved
+          // Defense-in-depth: tolerate a +-1 line skew between the
+          // tree-sitter endpoint (`startPosition.row + 1` of the enclosing
+          // callable) and the regex parser's startLine. Prefer line-1: the
+          // historical off-by-one direction was the regex line one BELOW the
+          // tree-sitter line.
+          const adjacent = byLine.get(line - 1) ?? byLine.get(line + 1)
+          if (adjacent) return adjacent
+        }
+        return null
+      }
+      const symbol = /^symbol:(.+)$/.exec(endpoint)
+      if (symbol) {
+        const candidates = nodeIdsByName.get(symbol[1]!) ?? []
+        // Prefer callable kinds; any same-file node is acceptable.
+        const preferred = candidates.filter((id) => /:(function|method|class):/.test(id))
+        return (preferred[0] ?? candidates[0]) ?? null
+      }
+      return null
+    }
+    const edges: CodegraphEdge[] = []
+    for (const e of spec.result.edges) {
+      if (parserMode && spec.backend === "tree-sitter" && e.source === "tree-sitter") {
+        // Phase 0 tree-sitter: parser-owned edges survive with remapped
+        // endpoints (intra-file calls). Edges whose target cannot be
+        // resolved (service tags, out-of-file symbols) stay index-time-only.
+        const fromNodeID = resolveParserEndpoint(e.fromNodeID)
+        const toNodeID = resolveParserEndpoint(e.toNodeID)
+        if (fromNodeID && toNodeID) {
+          edges.push({ id: e.id, fromNodeID, toNodeID, kind: e.kind })
+        }
+        continue
+      }
+      // Everything else keeps the strict endpoint check (regex `imports`
+      // edges stay discarded - module resolution is derived).
+      if (knownNodeIDs.has(e.fromNodeID) && knownNodeIDs.has(e.toNodeID)) {
+        edges.push({ id: e.id, fromNodeID: e.fromNodeID, toNodeID: e.toNodeID, kind: e.kind })
+      }
+    }
+
+    // Phase 0 tree-sitter (parser mode): track tree-sitter-parsed fileIDs
+    // that OWN their call edges (at least one parser edge was actually
+    // written this build) plus those edge ids, so rebuildDerivedGraph can
+    // preserve them (skip delete + skip derived calls regeneration). Files
+    // whose parser edges could not be stored keep the full derived lifecycle.
+    //
+    // Phase 5 (Batch 3): the ownership guard additionally requires at least
+    // one `source: "tree-sitter"` edge in the parse result. The AST-walk
+    // languages never emit parser edges, so their regex edges must not claim
+    // ownership.
+    if (parserMode && spec.backend === "tree-sitter" && spec.result.edges.some((e) => e.source === "tree-sitter")) {
+      if (edges.length > 0) {
+        yield* Ref.update(spec.parserFileIDsRef, (s) => {
+          s.add(fileID)
+          return s
+        })
+        yield* Ref.update(spec.parserEdgeIDsRef, (s) => {
+          for (const e of edges) s.add(e.id)
+          return s
+        })
+      }
+    }
+
+    if (spec.fileKind) {
+      nodes.push({
+        id: `${fileID}:artifact:${spec.fileKind}`,
+        fileID,
+        kind: spec.fileKind,
+        name: artifactFileName(filePath, spec.fileKind),
+        signature: relativePath,
+        startLine: 1,
+        endLine: lineCount,
+        code: fileCode,
+        derivation: "regex-v1",
+      })
+    }
+
+    return {
+      file,
+      nodes,
+      edges,
+      relativePath,
+      skipped: false,
+      ...(spec.previousFileID !== undefined ? { previousFileID: spec.previousFileID } : {}),
+    }
+  })
+
 const indexCandidateFileCore = (
   candidate: CandidateFile,
   relativePath: string,
@@ -616,6 +874,7 @@ const indexCandidateFileCore = (
     parserFileIDsRef: Ref.Ref<Set<string>>
     parserEdgeIDsRef: Ref.Ref<Set<string>>
     existingFilesByPath: ReadonlyMap<string, CodegraphFile>
+    profile: IndexProfile
   },
 ): Effect.Effect<void, never, never> => {
   return Effect.gen(function* () {
@@ -645,7 +904,9 @@ const indexCandidateFileCore = (
       return
     }
 
+    const readStart = performance.now()
     const content = yield* fs.readFileStringSafe(filePath)
+    if (cfg.profile.enabled) cfg.profile.readMs += performance.now() - readStart
     if (content === undefined) {
       yield* Ref.update(cfg.skippedRef, (n) => n + 1)
       yield* Ref.update(cfg.skippedReadErrorRef, (n) => n + 1)
@@ -732,6 +993,7 @@ const indexCandidateFileCore = (
     // pass adds query edges + syntax-error detection). Every failure path
     // falls back to the regex parser — the build never fails on a parse.
     let outcome: ParseOutcome
+    const parseStart = performance.now()
     if (isArtifact) {
       outcome = { result: { nodes: [], edges: [] }, backend: "regex", error: null }
     } else if (TS_LIKE_EXTS.has(ext)) {
@@ -765,6 +1027,7 @@ const indexCandidateFileCore = (
       outcome = { result: parser.parse(content, fileID), backend: "regex", error: null }
     }
     const result = outcome.result
+    if (cfg.profile.enabled) cfg.profile.parseMs += performance.now() - parseStart
     if (outcome.error) {
       // Record + continue: the file still indexes with the regex fallback
       // result; the parse error is visible in codegraph_parse_errors and the
@@ -796,180 +1059,25 @@ const indexCandidateFileCore = (
     else if (ext === ".toml") language = "toml"
     else if (ext === ".yml" || ext === ".yaml") language = "yaml"
 
-    const indexedAt = Date.now()
-    const file: CodegraphFile = {
-      id: fileID,
-      path: filePath,
+    const parsed = yield* buildFileGraph({
+      fileID,
+      filePath,
+      relativePath,
       contentHash,
       language,
-      indexedAt,
       sizeBytes: candidate.sizeBytes,
       mtimeMs: candidate.mtimeMs,
-    }
-    const fileLevelNode: CodegraphNode = {
-      id: `${fileID}:file`,
-      fileID,
-      kind: "file",
-      name: path.basename(filePath),
-      signature: relativePath,
-      startLine: 1,
-      endLine: lineCount,
-      code: content.slice(0, 4000),
-      // Phase 0 tree-sitter: the file-level node is indexer-owned, so it
-      // keeps the regex-v1 derivation even when symbol nodes below come
-      // from the tree-sitter path.
-      derivation: "regex-v1",
-    }
-    // Phase 0 tree-sitter: symbol nodes produced by the tree-sitter path get
-    // "tree-sitter-v1" (nodes themselves are still regex-extracted today);
-    // regex fallback (wasm unavailable / exception) stays "regex-v1".
-    const nodeDerivation: CodegraphNode["derivation"] =
-      outcome.backend === "tree-sitter" ? "tree-sitter-v1" : "regex-v1"
-    const nodes: CodegraphNode[] = [fileLevelNode, ...result.nodes.map((n) => {
-      const node: CodegraphNode = {
-        id: n.id,
-        fileID,
-        kind: n.kind,
-        name: n.name,
-        signature: n.signature,
-        startLine: n.startLine,
-        endLine: n.endLine,
-        code: n.code,
-        derivation: nodeDerivation,
-      }
-      return Object.assign(node, {
-        isEntrypoint: isEntrypointNode(node, filePath) ? 1 : 0,
-      }) as CodegraphNode
-    })]
-
-    const knownNodeIDs = new Set(nodes.map((n) => n.id))
-    const parserMode = cfg.edgeMode === "parser"
-    // Phase 0 tree-sitter (parser mode): resolve a parser-edge endpoint to a
-    // real node id. codegraph_edges FK-enforces both endpoints onto
-    // codegraph_nodes, so symbolic parser targets (`symbol:X`, `service:X`)
-    // and line-only sources (`<fileID>:function:<line>`) must be remapped to
-    // nodes in THIS file or the edge cannot be stored.
-    const nodeIdsByKindLine = new Map<string, Map<number, string>>()
-    const nodeIdsByName = new Map<string, string[]>()
-    for (const n of result.nodes) {
-      let byLine = nodeIdsByKindLine.get(n.kind)
-      if (!byLine) {
-        byLine = new Map()
-        nodeIdsByKindLine.set(n.kind, byLine)
-      }
-      byLine.set(n.startLine, n.id)
-      const byName = nodeIdsByName.get(n.name) ?? []
-      byName.push(n.id)
-      nodeIdsByName.set(n.name, byName)
-    }
-    const resolveParserEndpoint = (endpoint: string): string | null => {
-      if (knownNodeIDs.has(endpoint)) return endpoint
-      const kindLine = /^[^:]+:(function|method|class|variable|type):(\d+)$/.exec(endpoint)
-      if (kindLine) {
-        const byLine = nodeIdsByKindLine.get(kindLine[1]!)
-        if (byLine) {
-          const line = Number(kindLine[2])
-          const resolved = byLine.get(line)
-          if (resolved) return resolved
-          // Defense-in-depth: tolerate a ±1 line skew between the
-          // tree-sitter endpoint (`startPosition.row + 1` of the enclosing
-          // callable) and the regex parser's startLine. The parsers now
-          // agree exactly for single-line declarations; skew survives only
-          // for unusual layouts (e.g. `export` on its own line above
-          // `function`, where tree-sitter rows the `function` keyword but
-          // the regex anchors on `export`). Prefer line-1: the historical
-          // off-by-one direction was the regex line one BELOW the
-          // tree-sitter line.
-          const adjacent = byLine.get(line - 1) ?? byLine.get(line + 1)
-          if (adjacent) return adjacent
-        }
-        return null
-      }
-      const symbol = /^symbol:(.+)$/.exec(endpoint)
-      if (symbol) {
-        const candidates = nodeIdsByName.get(symbol[1]!) ?? []
-        // Prefer callable kinds; any same-file node is acceptable.
-        const preferred = candidates.filter((id) => /:(function|method|class):/.test(id))
-        return (preferred[0] ?? candidates[0]) ?? null
-      }
-      return null
-    }
-    const edges: CodegraphEdge[] = []
-    for (const e of result.edges) {
-      if (parserMode && outcome.backend === "tree-sitter" && e.source === "tree-sitter") {
-        // Phase 0 tree-sitter: parser-owned edges survive with remapped
-        // endpoints (intra-file calls). Edges whose target cannot be
-        // resolved (service tags, out-of-file symbols) stay index-time-only.
-        const fromNodeID = resolveParserEndpoint(e.fromNodeID)
-        const toNodeID = resolveParserEndpoint(e.toNodeID)
-        if (fromNodeID && toNodeID) {
-          edges.push({ id: e.id, fromNodeID, toNodeID, kind: e.kind })
-        }
-        continue
-      }
-      // Everything else keeps the strict endpoint check (regex `imports`
-      // edges stay discarded — module resolution is derived).
-      if (knownNodeIDs.has(e.fromNodeID) && knownNodeIDs.has(e.toNodeID)) {
-        edges.push({ id: e.id, fromNodeID: e.fromNodeID, toNodeID: e.toNodeID, kind: e.kind })
-      }
-    }
-
-    // Phase 0 tree-sitter (parser mode): track tree-sitter-parsed fileIDs
-    // that OWN their call edges (at least one parser edge was actually
-    // written this build) plus those edge ids, so rebuildDerivedGraph can
-    // preserve them (skip delete + skip derived calls regeneration). Files
-    // whose parser edges could not be stored (cross-file `symbol:` targets,
-    // `new` expressions, service tags — nothing same-file resolvable, and
-    // the edges table FK-enforces both endpoints onto codegraph_nodes) keep
-    // the full derived calls lifecycle.
-    //
-    // Phase 5 (Batch 3): the ownership guard additionally requires at least
-    // one `source: "tree-sitter"` edge in the parse result. The AST-walk
-    // languages (rust/go/c/...) never emit parser edges — their regex edges
-    // (parseC's same-file `calls`) use derived-style `->` ids and must NOT
-    // claim parser ownership, or rebuildDerivedGraph would skip their calls
-    // regeneration and the cross-file peer-scope edges would vanish in
-    // parser mode. TS/PY are unaffected: their parser edges always carry
-    // source:"tree-sitter".
-    if (
-      parserMode &&
-      outcome.backend === "tree-sitter" &&
-      result.edges.some((e) => e.source === "tree-sitter")
-    ) {
-      if (edges.length > 0) {
-        yield* Ref.update(cfg.parserFileIDsRef, (s) => {
-          s.add(fileID)
-          return s
-        })
-        yield* Ref.update(cfg.parserEdgeIDsRef, (s) => {
-          for (const e of edges) s.add(e.id)
-          return s
-        })
-      }
-    }
-
-    if (fileKind) {
-      nodes.push({
-        id: `${fileID}:artifact:${fileKind}`,
-        fileID,
-        kind: fileKind,
-        name: artifactFileName(filePath, fileKind),
-        signature: relativePath,
-        startLine: 1,
-        endLine: lineCount,
-        code: content.slice(0, 4000),
-        derivation: "regex-v1",
-      })
-    }
-
-    yield* Queue.offer(cfg.parsedQueue, {
-      file,
-      nodes,
-      edges,
-      relativePath,
-      skipped: false,
+      lineCount,
+      fileCode: content.slice(0, 4000),
+      fileKind,
+      result,
+      backend: outcome.backend,
+      edgeMode: cfg.edgeMode,
+      parserFileIDsRef: cfg.parserFileIDsRef,
+      parserEdgeIDsRef: cfg.parserEdgeIDsRef,
       previousFileID: existing?.id,
     })
+    yield* Queue.offer(cfg.parsedQueue, parsed)
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.gen(function* () {
@@ -1513,6 +1621,9 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
+      const profile = makeProfile()
+      const stopRssSampler = startRssSampler(profile)
+      const profileStart = performance.now()
       // Phase 0 tree-sitter: prime the parser bundle ONCE per build (before
       // the walk loop). ensureWebTreeSitterReady is idempotent and never
       // throws; the per-file parse path then runs with the bundle loaded.
@@ -1523,8 +1634,9 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       const parserFileIDsRef = yield* Ref.make<Set<string>>(new Set())
       const parserEdgeIDsRef = yield* Ref.make<Set<string>>(new Set())
       const ignoreCtx = yield* loadIgnoreContext(input.root, input.excludePatterns)
-      const walkStart = Date.now()
+      const walkStart = performance.now()
       const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, ignoreCtx)
+      if (profile.enabled) profile.walkMs += performance.now() - walkStart
       const allFiles = walkResult.files
       yield* Effect.logDebug(`codegraph: walk took ${Date.now() - walkStart}ms (${allFiles.length} files)`)
       const codeFiles = allFiles.filter((f) => isIndexablePath(f.path))
@@ -1589,6 +1701,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           parserFileIDsRef,
           parserEdgeIDsRef,
           existingFilesByPath,
+          profile,
         })
       }
 
@@ -1603,10 +1716,21 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         const flushBatch = Effect.gen(function* () {
           const pending = batch
           batch = []
-          // v2: each `repo.writeFileGraph` runs in its own transaction. The
-          // v1 outer batch transaction was a commit-count optimisation only;
-          // per-file atomicity and catch-cause logging are preserved.
-          yield* Effect.gen(function* () {
+          const writeStart = performance.now()
+          // One transaction per persist batch instead of one per file. The
+          // profile put the per-file commit at ~9.5ms of SQLite time per file
+          // on a 5.6k-file monorepo; batching turns 5.6k commits into ~220.
+          yield* repo.writeFileGraphs(pending.map((parsed) => ({
+            file: parsed.file,
+            nodes: parsed.nodes,
+            edges: parsed.edges,
+            ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
+          }))).pipe(
+            // Per-file error attribution and atomicity are preserved: a failed
+            // batch is retried one file at a time so the bad file is isolated,
+            // logged and recorded, and the rest still land.
+            Effect.catchCause(() =>
+              Effect.gen(function* () {
                 for (const parsed of pending) {
                   yield* repo.writeFileGraph({
                     file: parsed.file,
@@ -1634,7 +1758,10 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
                     ),
                   )
                 }
-          })
+              }),
+            ),
+          )
+          if (profile.enabled) profile.sqliteWriteMs += performance.now() - writeStart
         })
         while (processed < total) {
           const parsed = yield* Queue.take(parsedQueue)
@@ -1657,24 +1784,167 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       // Chunked producer: feed the bounded queue in slices so only the
       // current chunk's parse closures are live; concurrency is
       // configurable/adaptive (default 8 preserves current throughput).
-      const feedParseQueue = Effect.gen(function* () {
+      const feedParseQueueTs = Effect.gen(function* () {
         for (const chunk of streamCandidateBatches(codeFiles, 1000)) {
           yield* Effect.forEach(chunk, parseFiber, { concurrency: resolveParseConcurrency(), discard: true })
           if (yield* Ref.get(cancelled)) break
         }
       })
+
+      // Native backend: the sidecar reads, hashes and parses, and this fiber
+      // only shapes the graph and writes. Any failure falls through to the
+      // TypeScript producer for the files the sidecar did not deliver.
+      const nativeExecutable = yield* Effect.promise(() => resolveNativeIndexerPath())
+      const handledByNative = new Set<string>()
+      let backend: "native" | "typescript" = nativeExecutable === undefined ? "typescript" : "native"
+
+      const indexNativeFile = (result: NativeFileResult): Effect.Effect<void, never, never> =>
+        Effect.gen(function* () {
+          // One line per input file; a duplicate would double-count against
+          // `total` and desynchronise the drain loop.
+          if (handledByNative.has(result.path)) return
+          handledByNative.add(result.path)
+          const relativePath = result.relativePath
+          yield* Ref.update(progressCounter, (n) => n + 1)
+          if (result.status === "skipped") {
+            yield* Ref.update(skippedRef, (n) => n + 1)
+            const bucket = result.skipReason
+            if (bucket === "cached") {
+              yield* Ref.update(skippedCachedRef, (n) => n + 1)
+              if (result.fileID) {
+                yield* Ref.update(cachedFileIDsRef, (s) => {
+                  s.add(result.fileID)
+                  return s
+                })
+              }
+            } else if (bucket === "artifact") yield* Ref.update(skippedArtifactRef, (n) => n + 1)
+            else if (bucket === "minified") yield* Ref.update(skippedMinifiedRef, (n) => n + 1)
+            else if (bucket === "tooLargeParse") yield* Ref.update(skippedTooLargeParseRef, (n) => n + 1)
+            else if (bucket === "readError") yield* Ref.update(skippedReadErrorRef, (n) => n + 1)
+            yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
+            if (input.onProgress) {
+              const done = yield* Ref.get(progressCounter)
+              yield* input.onProgress({ file: relativePath, done, total })
+            }
+            return
+          }
+          if (result.parseError) {
+            yield* repo
+              .recordParseError({ path: relativePath, cause: result.parseError.message, indexedAt: Date.now() })
+              .pipe(
+                Effect.catchCause((innerCause) =>
+                  Effect.logWarning(`recordParseError insert failed for ${relativePath}`, {
+                    cause: Cause.pretty(innerCause),
+                  }),
+                ),
+              )
+            yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
+          }
+          const existing = existingFilesByPath.get(result.path)
+          const parsed = yield* buildFileGraph({
+            fileID: result.fileID,
+            filePath: result.path,
+            relativePath,
+            contentHash: result.hash,
+            language: result.language,
+            sizeBytes: result.sizeBytes,
+            mtimeMs: result.mtimeMs,
+            lineCount: result.lineCount,
+            fileCode: result.fileCode,
+            fileKind: result.fileKind as CodegraphNodeKind | undefined,
+            result: {
+              nodes: result.nodes,
+              edges: result.edges as unknown as ParsedEdge[],
+              backend: result.backend,
+            },
+            backend: result.backend,
+            edgeMode,
+            parserFileIDsRef,
+            parserEdgeIDsRef,
+            previousFileID: existing?.id,
+          })
+          yield* Queue.offer(parsedQueue, parsed)
+          if (input.onProgress) {
+            const done = yield* Ref.get(progressCounter)
+            yield* input.onProgress({ file: relativePath, done, total })
+          }
+        })
+
+      const feedParseQueueNative = Effect.gen(function* () {
+        const outcome = yield* runNativeIndex({
+          request: {
+            root: input.root,
+            mode: "files",
+            force: input.force ?? false,
+            maxFileSizeBytes,
+            files: codeFiles.map((candidate) => {
+              const existing = existingFilesByPath.get(candidate.path)
+              return {
+                path: candidate.path,
+                fileID: existing?.id ?? randomUUID(),
+                sizeBytes: candidate.sizeBytes,
+                mtimeMs: candidate.mtimeMs,
+                ...(existing ? { knownHash: existing.contentHash } : {}),
+                ...(existing
+                  ? { knownSizeBytes: existing.sizeBytes, knownMtimeMs: existing.mtimeMs }
+                  : {}),
+              }
+            }),
+          },
+          onFile: indexNativeFile,
+          isCancelled: Ref.get(cancelled),
+          ...(nativeExecutable ? { executable: nativeExecutable } : {}),
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.succeed({
+              summary: undefined,
+              backend: "typescript" as const,
+              failure: Cause.pretty(cause),
+            }),
+          ),
+        )
+        // One warning per build, whatever the failure was: the build finishes on
+        // the TypeScript parser for every file the sidecar did not deliver.
+        if ("failure" in outcome) {
+          backend = "typescript"
+          yield* Effect.logWarning(
+            `native indexer failed, falling back to the TypeScript parser for ${
+              codeFiles.length - handledByNative.size
+            } remaining files: ${outcome.failure.split("\n")[0]}`,
+          )
+        }
+        const remaining = codeFiles.filter((candidate) => !handledByNative.has(candidate.path))
+        if (remaining.length === 0) return
+        // A clean exit that delivered fewer files than it was given would leave
+        // `drainParsedQueue` waiting for `total` items forever, so the shortfall
+        // always goes through the TypeScript producer.
+        if (!("failure" in outcome)) {
+          yield* Effect.logWarning(
+            `native indexer returned ${handledByNative.size} of ${codeFiles.length} files; indexing the rest with the TypeScript parser`,
+          )
+          backend = "typescript"
+        }
+        for (const chunk of streamCandidateBatches(remaining, 1000)) {
+          yield* Effect.forEach(chunk, parseFiber, { concurrency: resolveParseConcurrency(), discard: true })
+          if (yield* Ref.get(cancelled)) break
+        }
+      })
+
+      const feedParseQueue = backend === "native" ? feedParseQueueNative : feedParseQueueTs
       yield* Effect.all([feedParseQueue, drainParsedQueue], { concurrency: 2, discard: true }).pipe(
         Effect.ensuring(Queue.shutdown(parsedQueue)),
       )
-      yield* Effect.logDebug(`codegraph: parse+drain took ${Date.now() - parseStart}ms`)
-      const checkpointStart = Date.now()
+      yield* Effect.logDebug(`codegraph: parse+drain took ${Date.now() - parseStart}ms (backend ${backend})`)
+      const checkpointStart = performance.now()
       yield* storage.exec("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
+      if (profile.enabled) profile.checkpointMs += performance.now() - checkpointStart
       yield* Effect.logDebug(`codegraph: wal_checkpoint(TRUNCATE) took ${Date.now() - checkpointStart}ms`)
 
       // Phase 3: prune files that disappeared between walks. Before this,
       // a `full rebuild` left orphan rows in `codegraph_files` and their
       // edges + nodes behind, inflating `totalFiles` and the `totalEdges`
       // baseline in `meta`. The diff is `existingFilesByPath - walked`.
+      const pruneStart = performance.now()
       const walkedPaths = new Set(allFiles.map((f) => f.path))
       const orphanFileRows: Array<{ id: string; path: string }> = []
       for (const [path, row] of existingFilesByPath) {
@@ -1699,6 +1969,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
             }
         })
       }
+      if (profile.enabled) profile.pruneMs += performance.now() - pruneStart
 
       // Phase 2: refresh `indexed_at` on every file that hit the content
       // cache in this build. One batched update per 900-id chunk —
@@ -1730,7 +2001,9 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
               preserveEdgeIDs: yield* Ref.get(parserEdgeIDsRef),
             }
           : undefined
+        const edgeStart = performance.now()
         yield* rebuildDerivedGraph(undefined, undefined, parserState)
+        if (profile.enabled) profile.edgeResolveMs += performance.now() - edgeStart
       }
       yield* Ref.get(skippedRef)
       const symbolsIndexed = yield* Ref.get(symbolsIndexedRef)
@@ -1767,6 +2040,43 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       // close to the 0.5 staleness cliff.
       const eligibleFiles = codeFiles.length + walkResult.skippedBySize
 
+      profile.totalMs = performance.now() - profileStart
+      profile.filesIndexed = indexed
+      profile.backend = backend
+      stopRssSampler()
+      if (profile.enabled) {
+        const target = process.env.BANYANCODE_INDEX_PROFILE
+        if (target && target.length > 0) {
+          yield* Effect.promise(() =>
+            Bun.write(
+              target,
+              JSON.stringify(
+                {
+                  mode: "full",
+                  concurrency: resolveParseConcurrency(),
+                  persistBatch: resolvePersistBatchSize(),
+                  files: codeFiles.length,
+                  ...profile,
+                },
+                null,
+                2,
+              ),
+            ),
+          ).pipe(Effect.ignore)
+        }
+        yield* Effect.logInfo(
+          `codegraph profile: total=${profile.totalMs.toFixed(0)}ms walk=${profile.walkMs.toFixed(0)} ` +
+            `read=${profile.readMs.toFixed(0)} parse=${profile.parseMs.toFixed(0)} ` +
+            `write=${profile.sqliteWriteMs.toFixed(0)} edges=${profile.edgeResolveMs.toFixed(0)} ` +
+            `checkpoint=${profile.checkpointMs.toFixed(0)} prune=${profile.pruneMs.toFixed(0)} ` +
+            `bump=${profile.bumpMs.toFixed(0)} peakRss=${(profile.peakRssBytes / 1048576).toFixed(0)}MB ` +
+            `backend=${backend}` +
+            (profile.nativeTimings
+              ? ` nativeRead=${profile.nativeTimings.readMs.toFixed(0)} nativeParse=${profile.nativeTimings.parseMs.toFixed(0)} nativeTotal=${profile.nativeTimings.totalMs.toFixed(0)}`
+              : ""),
+        )
+      }
+
       return {
         indexed,
         skipped: totalSkipped,
@@ -1784,6 +2094,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           readError: skippedReadError,
           parseFailure: skippedParseFailure,
         },
+        backend,
         parseErrors: parseErrors.slice(0, 50),
       }
     })
@@ -1803,6 +2114,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
+      const profile = makeProfile()
       // Phase 0 tree-sitter: prime the parser bundle once per (incremental)
       // build — same rationale as the full-build path in `index`.
       yield* ensureWebTreeSitterReady()
@@ -2056,6 +2368,7 @@ const drainParsedQueue = Effect.gen(function* () {
               parserFileIDsRef,
               parserEdgeIDsRef,
               existingFilesByPath,
+              profile,
             })
           }, { concurrency: 8, discard: true }),
           drainParsedQueue,

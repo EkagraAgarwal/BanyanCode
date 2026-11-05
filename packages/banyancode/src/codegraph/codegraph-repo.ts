@@ -180,6 +180,21 @@ export interface Interface {
     previousFileID?: string
   }) => Effect.Effect<void>
   /**
+   * Write N file graphs inside ONE transaction.
+   *
+   * `writeFileGraph` commits per file. On a real monorepo that is thousands of
+   * commits, and the codegraph profile puts the write phase at roughly a third
+   * of the build's wall time. This batches the same statements so the commit
+   * count drops to one per batch. Per-file error attribution is preserved by
+   * the caller, which retries the batch file-by-file when it fails.
+   */
+  readonly writeFileGraphs: (inputs: ReadonlyArray<{
+    file: CodegraphFile
+    nodes: CodegraphNode[]
+    edges: CodegraphEdge[]
+    previousFileID?: string
+  }>) => Effect.Effect<void>
+  /**
    * Deletes every graph row, rebuilds the FTS index, VACUUMs the file and
    * truncates the WAL. `dropFile` requests the strongest reset; because the
    * plugin holds the database open, that means an empty schema rather than an
@@ -1046,8 +1061,12 @@ export const make = (storage: Storage.Interface): Interface => {
       }),
     )
 
-  const writeFileGraph: Interface["writeFileGraph"] = (input) =>
-    transaction(
+  const writeFileGraphStatements = (input: {
+    file: CodegraphFile
+    nodes: CodegraphNode[]
+    edges: CodegraphEdge[]
+    previousFileID?: string
+  }): Effect.Effect<void> =>
       Effect.gen(function* () {
         yield* run("DELETE FROM codegraph_service_tags WHERE file_id = ?", [input.file.id])
         // Delete by path too: `codegraph_files.path` is UNIQUE, so a row left
@@ -1123,8 +1142,18 @@ export const make = (storage: Storage.Interface): Interface => {
             batch.flatMap((e) => [e.id, e.fromNodeID, e.toNodeID, e.kind]),
           )
         }
-      }),
-    )
+      })
+
+  const writeFileGraph: Interface["writeFileGraph"] = (input) => transaction(writeFileGraphStatements(input))
+
+  const writeFileGraphs: Interface["writeFileGraphs"] = (inputs) =>
+    inputs.length === 0
+      ? Effect.void
+      : transaction(
+          Effect.gen(function* () {
+            for (const input of inputs) yield* writeFileGraphStatements(input)
+          }),
+        )
 
   return {
     putFile,
@@ -1182,6 +1211,7 @@ export const make = (storage: Storage.Interface): Interface => {
     deleteDerivedEdgesForFiles,
     deleteAllDerivedEdges,
     writeFileGraph,
+    writeFileGraphs,
     clearAll,
     recomputeInDegree,
     bumpIndexedAt,

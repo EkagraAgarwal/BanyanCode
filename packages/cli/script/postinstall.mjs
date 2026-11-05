@@ -24,7 +24,12 @@ const arch =
 // Windows cannot spawn npm's .cmd shim directly, so reuse the npm CLI that runs this script.
 const npm = process.env.npm_execpath?.endsWith("npm-cli.js") ? [process.execPath, process.env.npm_execpath] : ["npm"]
 const sourceBinary = platform === "windows" ? `${sourceCommand}.exe` : sourceCommand
+// The codegraph indexer prefers the native sidecar and falls back to the
+// TypeScript parsers when it is missing, so this copy is best-effort: an older
+// platform package without the sidecar still installs a working CLI.
+const sidecarName = platform === "windows" ? "banyan-indexer.exe" : "banyan-indexer"
 const targetBinary = path.resolve(directory, packageJson.bin[command])
+const targetSidecar = path.join(path.dirname(targetBinary), sidecarName)
 const dependencies = packageJson.optionalDependencies ?? {}
 const base = Object.keys(dependencies).find((name) => name.endsWith(`-${platform}-${arch}`))
 if (!base) throw new Error(`BanyanCode does not provide a binary for ${platform}-${arch}`)
@@ -108,20 +113,32 @@ function packageNames() {
   return [...names, ...emulated].filter((name) => dependencies[name])
 }
 
-function copyBinary(source) {
-  if (!fs.existsSync(source)) throw new Error(`Binary not found at ${source}`)
-  fs.mkdirSync(path.dirname(targetBinary), { recursive: true })
-  if (fs.existsSync(targetBinary)) {
+function linkOrCopy(source, destination) {
+  fs.mkdirSync(path.dirname(destination), { recursive: true })
+  if (fs.existsSync(destination)) {
     try {
-      fs.unlinkSync(targetBinary)
+      fs.unlinkSync(destination)
     } catch {}
   }
   try {
-    fs.linkSync(source, targetBinary)
+    fs.linkSync(source, destination)
   } catch {
-    fs.copyFileSync(source, targetBinary)
+    fs.copyFileSync(source, destination)
   }
-  fs.chmodSync(targetBinary, 0o755)
+  fs.chmodSync(destination, 0o755)
+}
+
+function copyBinary(source) {
+  if (!fs.existsSync(source)) throw new Error(`Binary not found at ${source}`)
+  linkOrCopy(source, targetBinary)
+  // Best-effort: keep the sidecar beside the executable so the indexer finds it
+  // through `dirname(process.execPath)` without an extra lookup.
+  const sourceSidecar = path.join(path.dirname(source), sidecarName)
+  if (fs.existsSync(sourceSidecar)) {
+    linkOrCopy(sourceSidecar, targetSidecar)
+    return
+  }
+  console.warn(`BanyanCode: no native indexer sidecar in ${path.dirname(source)}; the codegraph will use the TypeScript parsers.`)
 }
 
 function resolveBinary(name) {

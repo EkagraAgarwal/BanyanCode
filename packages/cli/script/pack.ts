@@ -116,15 +116,26 @@ async function archive(bin: string, target: string, binary: string) {
   const executable = `${binary}${target.startsWith("windows-") ? ".exe" : ""}`
   const source = path.join(bin, executable)
   if (!(await Bun.file(source).exists()) || !Bun.file(source).size) throw new Error(`Missing binary: ${source}`)
+  // The standalone archive must carry the native indexer sidecar too; without
+  // it an extracted CLI silently falls back to the TypeScript parsers.
+  const sidecar = `banyan-indexer${target.startsWith("windows-") ? ".exe" : ""}`
+  const sidecarSource = path.join(bin, sidecar)
+  const hasSidecar = (await Bun.file(sidecarSource).exists()) && Bun.file(sidecarSource).size > 0
+  if (!hasSidecar) {
+    console.warn(`[native-indexer] ${target} archive has no sidecar; the extracted CLI falls back to the TypeScript parser`)
+  }
   // GitHub artifact downloads lose execute bits. Fixed timestamps make retries reproducible.
-  await chmod(source, 0o755)
-  await utimes(source, new Date("1980-01-01T00:00:00Z"), new Date("1980-01-01T00:00:00Z"))
+  for (const file of hasSidecar ? [source, sidecarSource] : [source]) {
+    await chmod(file, 0o755)
+    await utimes(file, new Date("1980-01-01T00:00:00Z"), new Date("1980-01-01T00:00:00Z"))
+  }
   const extension = target.startsWith("linux-") ? "tar.gz" : "zip"
   const output = path.join(archiveDir, `${binary}-${target}.${extension}`)
   await rm(output, { force: true })
+  const members = hasSidecar ? [executable, sidecar] : [executable]
   if (extension === "tar.gz") {
-    await $`tar --mtime=@0 --owner=0 --group=0 --numeric-owner -czf ${output} -C ${bin} ${executable}`
+    await $`tar --mtime=@0 --owner=0 --group=0 --numeric-owner -czf ${output} -C ${bin} ${members}`
   }
-  if (extension === "zip") await $`zip -X -q ${output} ${executable}`.cwd(bin)
+  if (extension === "zip") await $`zip -X -q ${output} ${members}`.cwd(bin)
   return output
 }

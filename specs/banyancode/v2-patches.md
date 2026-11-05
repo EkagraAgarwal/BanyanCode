@@ -166,7 +166,11 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/src/logo.ts` | branding | the v1 BanyanCode tree splash and wordmark | — |
 | `packages/tui/src/component/session-frame.tsx` | hook | the v1 layout: header, docked left sidebar, right inspector, footer, tabs over the transcript; the Trunk layout docks a rail in the left column, caps the transcript and slides a panels overlay over the right edge, selected by `session_layout`; a main panel that asks to bleed hides both side columns and their rails without touching the persisted layout | — |
 | `packages/tui/src/context/panel.tsx` | hook | a panel can present in place of the transcript and ask to bleed (take the whole main area); the Trunk panels overlay is separate presentation state | — |
-| `packages/tui/src/routes/session/index.tsx` | hook | takes the element drawn over the transcript; tool settle, diff reveal, token bloom and live subagent rows; drops its reading gutter for a bleeding main panel, and hands that flag to the prompt | — |
+| `packages/tui/src/routes/session/index.tsx` | hook | takes the element drawn over the transcript; tool settle, diff reveal, token bloom and live subagent rows; drops its reading gutter for a bleeding main panel, hands that flag to the prompt, and draws the gateway provenance marker beside read/grep/glob | — |
+| `packages/tui/src/util/tool-gateway.ts` | hook | repository-gateway provenance markers (`⇢ to`, `↩ reason`, `+symbols`) read from tool metadata, so a swap is visible and survives a reload | — |
+| `packages/tui/src/mini/tool.ts` | hook | appends the gateway marker to the read/grep/glob row description in the block view | — |
+| `packages/tui/test/util/tool-gateway.test.ts` | hook | covers every gateway marker route and the byte formatting | — |
+| `packages/tui/test/component/gateway-marker.test.tsx` | hook | renders each gateway marker inline and at a narrow width | — |
 | `packages/tui/src/routes/session/sidebar.tsx` | hook | a docked sidebar has its own width and the v1 border, and its scrolling body reserves the scrollbar's column | — |
 | `packages/tui/src/ui/session-rails.tsx` | hook | v1 resize handle and collapsed rail for the side columns | — |
 | `packages/tui/src/component/prompt/autocomplete.tsx` | fix | a command offered by both client and server is listed once; a mounted surface's own `@` rows are listed before the host's file, agent and reference matches | — |
@@ -292,3 +296,14 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/prompt-paste.test.tsx` | fix | Home readiness marker follows the redesign | — |
 | `packages/tui/test/session-backfill-disclosure.test.tsx` | fix | clicks the disclosure at the column the row actually starts at, so it works in either chat layout | — |
 | `packages/tui/test/session-group-navigation.test.tsx` | fix | clicks the group header at the column the row actually starts at, so it works in either chat layout | — |
+| `packages/cli/script/native-indexer.ts` | hook | builds and stages the `banyan-indexer` sidecar per target | — |
+| `packages/cli/script/pack.ts` | hook | packs the `banyan-indexer` sidecar into each platform package | — |
+| `packages/cli/script/verify-artifact.ts` | hook | checks the sidecar exists and runs in a built artifact | — |
+| `packages/tui/src/config/keybind.ts` | hook | `agent.mode.toggle`, Tab between build and plan | — |
+| `packages/tui/src/config/v1/keybind.ts` | hook | v1 alias for `agent.mode.toggle` | — |
+| `packages/tui/src/context/local.tsx` | hook | `agent.toggleMode()` behind the Tab binding | — |
+| `packages/tui/src/feature-plugins/prompt/footer.tsx` | hook | shows the Tab target mode in the mode's colour | — |
+| `packages/tui/src/routes/session/activity-summary.ts` | hook | collapsed activity label carries the gateway tally | — |
+| `packages/tui/src/routes/session/group-view.tsx` | hook | collapsed exploration row carries the gateway tally, since it hides each call's marker | — |
+| `packages/tui/test/keybind.test.ts` | hook | pins the Tab default for `agent.mode.toggle` | — |
+| `packages/tui/test/agent-mode-toggle.test.tsx` | hook | covers the Tab toggle, its priority and the disabled-agent no-op | — |

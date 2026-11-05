@@ -50,6 +50,19 @@ export const platformByTarget = (target: string): Platform | undefined =>
 
 export const executableName = (os: Platform["os"]): string => (os === "win32" ? "banyancode.exe" : "banyancode")
 
+/**
+ * The codegraph sidecar ships beside the executable in every platform package
+ * and archive. It is an optimisation: without it the indexer falls back to the
+ * TypeScript parsers, so a local dev pack may omit it.
+ */
+export const SIDECAR = "banyan-indexer"
+
+export const sidecarName = (os: Platform["os"]): string => (os === "win32" ? `${SIDECAR}.exe` : SIDECAR)
+
+/** The sidecar as staged by build.ts inside `cli-<target>/bin`. */
+export const builtSidecar = (dist: string, entry: Platform): string =>
+  `${buildDirectory(dist, entry)}/bin/${sidecarName(entry.os)}`
+
 /** The build directory build.ts writes: `cli-<target>`, binary name `opencode(.exe)`. */
 export const buildDirectory = (dist: string, entry: Platform): string =>
   `${dist}/cli-${entry.target}`

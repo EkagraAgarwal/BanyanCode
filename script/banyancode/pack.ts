@@ -85,6 +85,25 @@ for (const entry of discovered) {
   await copyFile(source, path.join(directory, "bin", executable))
   if (entry.os !== "win32") await chmod(path.join(directory, "bin", executable), 0o755)
 
+  // The codegraph sidecar travels with the executable. A `--all` (release) pack
+  // must have it for every target; a local pack may omit it, in which case the
+  // shipped CLI falls back to the TypeScript parsers.
+  const sidecar = BanyanPlatforms.sidecarName(entry.os)
+  const sidecarSource = BanyanPlatforms.builtSidecar(dist, entry)
+  const hasSidecar = (await Bun.file(sidecarSource).exists()) && Bun.file(sidecarSource).size > 0
+  if (!hasSidecar && all) {
+    throw new Error(
+      `${entry.target} is missing its native indexer sidecar at ${sidecarSource}. ` +
+        `Release packages must ship ${sidecar}; rebuild the target (it is produced by packages/banyancode/native).`,
+    )
+  }
+  if (hasSidecar) {
+    await copyFile(sidecarSource, path.join(directory, "bin", sidecar))
+    if (entry.os !== "win32") await chmod(path.join(directory, "bin", sidecar), 0o755)
+  } else {
+    console.warn(`warn: ${entry.target} has no ${sidecar}; the package will use the TypeScript parsers`)
+  }
+
   await Bun.write(
     path.join(directory, "package.json"),
     `${JSON.stringify(
@@ -109,13 +128,16 @@ for (const entry of discovered) {
     const output = path.join(archiveDir, `${entry.npm}.${entry.archive}`)
     await rm(output, { force: true })
     // Fixed timestamp makes retries byte-identical.
-    await utimes(path.join(directory, "bin", executable), new Date("1980-01-01T00:00:00Z"), new Date("1980-01-01T00:00:00Z"))
-    if (entry.archive === "tar.gz") {
-      await $`tar --mtime=@0 --owner=0 --group=0 --numeric-owner -czf ${output} -C ${path.join(directory, "bin")} ${executable}`
-    } else {
-      await $`zip -X -q ${output} ${executable}`.cwd(path.join(directory, "bin"))
+    const members = hasSidecar ? [executable, sidecar] : [executable]
+    for (const member of members) {
+      await utimes(path.join(directory, "bin", member), new Date("1980-01-01T00:00:00Z"), new Date("1980-01-01T00:00:00Z"))
     }
-    console.log(`  archive ${path.relative(repo, output)}`)
+    if (entry.archive === "tar.gz") {
+      await $`tar --mtime=@0 --owner=0 --group=0 --numeric-owner -czf ${output} -C ${path.join(directory, "bin")} ${members}`
+    } else {
+      await $`zip -X -q ${output} ${members}`.cwd(path.join(directory, "bin"))
+    }
+    console.log(`  archive ${path.relative(repo, output)}${hasSidecar ? " (+ sidecar)" : ""}`)
   }
   await pack(directory)
   console.log(`  package ${entry.npm}`)

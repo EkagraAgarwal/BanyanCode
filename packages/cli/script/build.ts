@@ -13,6 +13,7 @@ import { discoverPluginRuntimeSpecifiers, pluginRuntimeLoaderCode } from "@openc
 import { buildAppArchive } from "./app-assets"
 import { verifyArtifact, verifySimulationGraph } from "./verify-artifact"
 import { resolveOpencodePty } from "./opencode-pty"
+import { buildNativeIndexer, stageNativeIndexer } from "./native-indexer"
 import { NativeArch } from "../../../script/native-arch"
 import { bundledModelsSnapshot, modelsSnapshotPlugin } from "../../core/script/models-snapshot"
 
@@ -214,6 +215,15 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
   verifySimulationGraph(simulationInputs)
   await NativeArch.verify(path.join(outdir, name, "bin", item.os === "win32" ? `${binary}.exe` : binary), item.arch)
 
+  // The codegraph indexer prefers the native sidecar and falls back to the
+  // TypeScript parsers when it is absent. Release builds must ship it for every
+  // target; a `--single` dev build may not have cargo at all.
+  const sidecar = await buildNativeIndexer(item, { required: !singleFlag })
+  if (sidecar) {
+    await stageNativeIndexer(path.join(outdir, name, "bin"), item, sidecar)
+    console.log(`staged banyan-indexer for ${name}`)
+  }
+
   await Bun.write(
     path.join(outdir, name, "package.json"),
     JSON.stringify(
@@ -229,7 +239,10 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
       2,
     ),
   )
-  await verifyArtifact(path.join(outdir, name))
+  await verifyArtifact(path.join(outdir, name), {
+    item,
+    nativeIndexer: sidecar ? "required" : "optional",
+  })
 }
 
 async function compileExecutable(item: (typeof allTargets)[number]) {

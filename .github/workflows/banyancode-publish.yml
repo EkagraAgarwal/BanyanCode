@@ -158,6 +158,53 @@ jobs:
           # cross-compiled targets (musl, arm64), so install every variant, libc included.
           install-flags: '--os="*" --cpu="*" --libc="*"'
 
+      # The codegraph indexer prefers a native sidecar and falls back to the
+      # TypeScript parsers without one. build.ts builds it for the matrix target
+      # and stages it into dist/cli-<target>/bin, so the artifact and the npm
+      # package both carry it. Cross targets (all musl variants, every non-host
+      # arch) go through cargo-zigbuild, which needs zig for its libc and linker.
+      - name: Setup native indexer toolchain
+        shell: bash
+        env:
+          ZIG_VERSION: "0.14.1"
+        run: |
+          set -euo pipefail
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          fi
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # zig cannot emit the MSVC ABI, so Windows targets use cargo directly
+          # (x64 is native, arm64 uses the image's MSVC ARM64 toolset).
+          if [ "$RUNNER_OS" != "Windows" ] && ! command -v cargo-zigbuild >/dev/null 2>&1; then
+            cargo install cargo-zigbuild --locked
+          fi
+          if [ "$RUNNER_OS" != "Windows" ] && ! command -v zig >/dev/null 2>&1; then
+            case "$RUNNER_OS" in
+              Linux) ZIG_ARCH=x86_64-linux ;;
+              macOS) ZIG_ARCH=aarch64-macos ;;
+              *) echo "no zig build for $RUNNER_OS" >&2; exit 1 ;;
+            esac
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${ZIG_ARCH}-${ZIG_VERSION}.tar.xz" | tar -xJ -C "$RUNNER_TEMP"
+            echo "$RUNNER_TEMP/zig-${ZIG_ARCH}-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # windows-arm64 is cross-compiled on the x64 runner. zig cannot emit
+            # the MSVC ABI, so this relies on the image's MSVC ARM64 toolset.
+            rustup target add aarch64-pc-windows-msvc
+          fi
+          cargo --version
+          zig version || true
+          cargo zigbuild --version || true
+
+      - name: Restore native indexer build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: packages/banyancode/native/target
+          key: native-indexer-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('packages/banyancode/native/Cargo.lock') }}
+          restore-keys: |
+            native-indexer-${{ runner.os }}-${{ matrix.target }}-
+
       - name: Build ${{ matrix.target }}
         shell: bash
         env:
@@ -168,6 +215,13 @@ jobs:
           OPENCODE_RELEASE: "true"
           BANYANCODE_POSTHOG_KEY: ${{ secrets.BANYANCODE_POSTHOG_KEY }}
         run: bun ./packages/cli/script/build.ts --skip-install
+
+      - name: Save native indexer build cache
+        if: always()
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: packages/banyancode/native/target
+          key: native-indexer-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('packages/banyancode/native/Cargo.lock') }}
 
       - name: Upload CLI artifact (Unix)
         if: runner.os != 'Windows'
