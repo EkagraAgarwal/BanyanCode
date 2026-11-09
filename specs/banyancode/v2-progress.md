@@ -4,7 +4,7 @@ Status at 2026-11-02. Plan: [v2-migration-plan.md](v2-migration-plan.md). Featur
 
 ## Where things are
 
-- `banyancode@latest` is `26.11.1`, with a stable GitHub release: the Home redesign, the Understory Agents tab and the idle CPU fix. Everyone who installs or upgrades now gets v2. The last v1 release is `26.10.9`.
+- `banyancode@latest` is `26.11.2`, with a stable GitHub release: plan mode, the repository gateway, the five code tools and the native indexer. 26.11.1 shipped the Home redesign, the Understory Agents tab and the idle CPU fix. Everyone who installs or upgrades now gets v2. The last v1 release is `26.10.9`.
 - `v2-base` is on GitHub at the tagged commit and `banyancode-ci` passes. `main` is still v1, so the branch cutover has not happened.
 - The publish workflow runs from a `v[0-9]*` tag. A push to `release-check` builds and packs all 12 platforms and publishes nothing; use it when the workflow changes. Dispatch needs the file on the default branch.
 
