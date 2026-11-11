@@ -313,3 +313,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `assets/agents.png` | branding | README screenshot | — |
 | `assets/front.png` | branding | README screenshot | — |
 | `assets/subagent.png` | branding | README screenshot | — |
+| `install` | branding | installs `banyancode` from the GitHub release archives, with the indexer sidecar | — |
+| `install.ps1` | branding | Windows installer for the BanyanCode release archives, with the indexer sidecar | — |
+| `.github/CODEOWNERS` | branding | BanyanCode owner replaces upstream's | — |
+| `.github/ISSUE_TEMPLATE/*` | branding | BanyanCode issue forms | — |

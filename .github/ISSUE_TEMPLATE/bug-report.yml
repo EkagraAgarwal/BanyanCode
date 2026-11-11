@@ -19,10 +19,10 @@ body:
       required: false
 
   - type: input
-    id: opencode-version
+    id: banyancode-version
     attributes:
-      label: OpenCode version
-      description: What version of OpenCode are you using?
+      label: BanyanCode version
+      description: What version of BanyanCode are you using?
     validations:
       required: false
 
@@ -41,9 +41,9 @@ body:
   - type: textarea
     id: screenshot-or-link
     attributes:
-      label: Screenshot
-      description: Attach a screenshot or recording
-      placeholder: Drag and drop screenshot here
+      label: Screenshot and/or share link
+      description: Run `/share` to get a share link, or attach a screenshot
+      placeholder: Paste link or drag and drop screenshot here
     validations:
       required: false
 
