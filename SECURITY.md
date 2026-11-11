@@ -1,47 +1,27 @@
 # Security
 
-## IMPORTANT
+## Reporting a vulnerability
 
-We do not accept AI generated security reports. We receive a large number of
-these and we absolutely do not have the resources to review them all. If you
-submit one that will be an automatic ban from the project.
+Please report suspected vulnerabilities privately through the GitHub Security
+Advisory "Report a vulnerability" flow:
 
-## Threat Model
+https://github.com/EkagraAgarwal/BanyanCode/security/advisories/new
 
-### Overview
+Do not include sensitive details in a public issue. Reports should include the
+affected version or commit, reproduction steps, impact, and any suggested
+mitigation. We will acknowledge valid reports and coordinate disclosure with
+the reporter.
 
-OpenCode is an AI-powered coding assistant that runs locally on your machine. It provides an agent system with access to powerful tools including shell execution, file operations, and web access.
+Security reports generated solely by automated or generative tools without a
+reproducible finding are not actionable.
 
-### No Sandbox
+## Automated plugin scans
 
-OpenCode does **not** sandbox the agent. The permission system exists as a UX feature to help users stay aware of what actions the agent is taking - it prompts for confirmation before executing commands, writing files, etc. However, it is not designed to provide security isolation.
+The trusted source-policy scan uses `.plugin-scanner.toml` and the repository's
+trusted policy. The independent catalog-compatibility scan runs without that
+configuration or a baseline and intentionally ignores repository suppressions.
+It checks the plugin as an external catalog consumer would see it.
 
-If you need true isolation, run OpenCode inside a Docker container or VM.
-
-### Server Mode
-
-Server mode is opt-in only. When enabled, set `OPENCODE_SERVER_PASSWORD` to require HTTP Basic Auth. Without this, the server runs unauthenticated (with a warning). It is the end user's responsibility to secure the server - any functionality it provides is not a vulnerability.
-
-### Out of Scope
-
-| Category                        | Rationale                                                               |
-| ------------------------------- | ----------------------------------------------------------------------- |
-| **Server access when opted-in** | If you enable server mode, API access is expected behavior              |
-| **Sandbox escapes**             | The permission system is not a sandbox (see above)                      |
-| **LLM provider data handling**  | Data sent to your configured LLM provider is governed by their policies |
-| **MCP server behavior**         | External MCP servers you configure are outside our trust boundary       |
-| **Malicious config files**      | Users control their own config; modifying it is not an attack vector    |
-
----
-
-# Reporting Security Issues
-
-We appreciate your efforts to responsibly disclose your findings, and will make every effort to acknowledge your contributions.
-
-To report a security issue, please use the GitHub Security Advisory ["Report a Vulnerability"](https://github.com/anomalyco/opencode/security/advisories/new) tab.
-
-The team will send a response indicating the next steps in handling your report. After the initial reply to your report, the security team will keep you informed of the progress towards a fix and full announcement, and may ask for additional information or guidance.
-
-## Escalation
-
-If you do not receive an acknowledgement of your report within 6 business days, you may send an email to security@anoma.ly
+Any credential fixture used by the catalog scan is synthetic, non-functional,
+and safe to represent in test data; it is never a real secret. The scan accepts
+only results scoring at least 80, with zero high or critical findings.
