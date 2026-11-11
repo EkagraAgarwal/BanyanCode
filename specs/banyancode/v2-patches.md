@@ -307,3 +307,9 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/src/routes/session/group-view.tsx` | hook | collapsed exploration row carries the gateway tally, since it hides each call's marker | — |
 | `packages/tui/test/keybind.test.ts` | hook | pins the Tab default for `agent.mode.toggle` | — |
 | `packages/tui/test/agent-mode-toggle.test.tsx` | hook | covers the Tab toggle, its priority and the disabled-agent no-op | — |
+| `README.md` | branding | BanyanCode README replaces upstream's | — |
+| `ARCHITECTURE.md` | branding | BanyanCode architecture document | — |
+| `SECURITY.md` | branding | BanyanCode security policy and advisory contact | — |
+| `assets/agents.png` | branding | README screenshot | — |
+| `assets/front.png` | branding | README screenshot | — |
+| `assets/subagent.png` | branding | README screenshot | — |
