@@ -63,6 +63,8 @@ export const register = (ctx: Context, deps: CacheDeps): Effect.Effect<void, nev
           providerID: event.model.providerID,
           modelID: event.model.id,
           sessionID: event.sessionID,
+          // Token sharing uses api.openai.com too; its ChatGPT plugin sets thread-id.
+          chatgpt: new URL(event.request.url).hostname === "chatgpt.com" || event.request.headers.has("thread-id"),
           body: parsed,
           ...(comparisonResponseID === undefined ? {} : { comparisonResponseID }),
         })

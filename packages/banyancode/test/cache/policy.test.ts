@@ -28,6 +28,7 @@ describe("prompt cache policy", () => {
       config: config(),
       providerID: "openai",
       modelID: "gpt-5.6",
+      chatgpt: false,
       sessionID: "ses_abc",
       body: { model: "gpt-5.6", input: "hi" },
     })
@@ -45,6 +46,7 @@ describe("prompt cache policy", () => {
       config: config(),
       providerID: "openai",
       modelID: "gpt-5.6",
+      chatgpt: false,
       sessionID: "ses_child",
       body: { prompt_cache_key: "root-affinity" },
     })
@@ -56,6 +58,7 @@ describe("prompt cache policy", () => {
       config: config({ banyancode_prompt_cache_key: "off", banyancode_prompt_cache_mode: "off" }),
       providerID: "openai",
       modelID: "gpt-5.6",
+      chatgpt: false,
       sessionID: "ses_abc",
       body: { prompt_cache_key: "old", prompt_cache_options: { mode: "implicit" } },
     })
@@ -68,6 +71,7 @@ describe("prompt cache policy", () => {
       config: config({ banyancode_prompt_cache_diagnostics: true }),
       providerID: "openai",
       modelID: "gpt-5.6",
+      chatgpt: false,
       sessionID: "ses_abc",
       body: {},
       comparisonResponseID: "resp_1",
@@ -80,6 +84,7 @@ describe("prompt cache policy", () => {
       config: config(),
       providerID: "anthropic",
       modelID: "claude-sonnet-4",
+      chatgpt: false,
       sessionID: "ses_abc",
       body: { model: "claude-sonnet-4" },
     })
@@ -89,6 +94,7 @@ describe("prompt cache policy", () => {
       config: config(),
       providerID: "openai",
       modelID: "gpt-5.5",
+      chatgpt: false,
       sessionID: "ses_abc",
       body: { model: "gpt-5.5" },
     })
@@ -110,6 +116,7 @@ describe("banyancode_tool_search_defer (v1 port)", () => {
       config: config(),
       providerID: "openai",
       modelID: "gpt-5.6",
+      chatgpt: false,
       sessionID: "ses_abc",
       body: { tools },
     })
@@ -122,6 +129,7 @@ describe("banyancode_tool_search_defer (v1 port)", () => {
       config: config({ banyancode_tool_search_defer: true }),
       providerID: "openai",
       modelID: "gpt-5.6",
+      chatgpt: false,
       sessionID: "ses_abc",
       body: { tools },
     })
@@ -137,6 +145,7 @@ describe("banyancode_tool_search_defer (v1 port)", () => {
       config: config({ banyancode_tool_search_defer: true }),
       providerID: "anthropic",
       modelID: "gpt-5.6",
+      chatgpt: false,
       sessionID: "ses_abc",
       body: { tools },
     })
@@ -146,6 +155,7 @@ describe("banyancode_tool_search_defer (v1 port)", () => {
       config: config({ banyancode_tool_search_defer: true }),
       providerID: "openai",
       modelID: "gpt-5.3",
+      chatgpt: false,
       sessionID: "ses_abc",
       body: { tools },
     })
@@ -157,6 +167,7 @@ describe("banyancode_tool_search_defer (v1 port)", () => {
       config: config({ banyancode_tool_search_defer: true }),
       providerID: "openai",
       modelID: "gpt-6",
+      chatgpt: false,
       sessionID: "ses_abc",
       body: { tools: [...tools, { type: "tool_search" }] },
     })

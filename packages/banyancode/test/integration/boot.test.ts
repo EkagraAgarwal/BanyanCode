@@ -72,8 +72,7 @@ it.live(
     Effect.gen(function* () {
       const directory = yield* Effect.acquireRelease(
         Effect.promise(() => mkdtemp(join(tmpdir(), "banyancode-boot-"))),
-        (path) =>
-          Effect.promise(() => rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })),
+        (path) => Effect.promise(() => rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })),
       )
       const previous = process.env.BANYANCODE_PROJECT_DB_DIR
       process.env.BANYANCODE_PROJECT_DB_DIR = join(directory, "db")
@@ -148,13 +147,14 @@ it.live(
         true,
       )
       expect(texts.some((text: string) => text.includes("BanyanCode orchestration"))).toBe(true)
-      // The live graph line is its own part, marked so request assembly moves it behind stable text.
+      // Live graph changes must not rewrite the system prefix before conversation history.
       const graph = policy.system.find((part: { text: string }) => part.text.startsWith("Graph state:"))
-      expect(graph?.metadata).toEqual({ system: { volatility: "dynamic" }, banyancode: { source: "codegraph" } })
+      expect(graph).toBeUndefined()
       const stable = policy.system.find((part: { text: string }) =>
         part.text.includes("Repository intelligence is the canonical interface"),
       )
       expect(stable?.text).not.toContain("Graph state:")
+      expect(stable?.text).toContain("inspect live graph status")
 
       // ── storage ──────────────────────────────────────────────────────────
       const status = yield* rpc.call("banyancode", "status", {})

@@ -571,15 +571,14 @@ describe("codegraph system policy", () => {
     expect(renderPolicyParts({ graph })).toEqual({ stable: POLICY_TEXT, dynamic: graphLineFor(graph) })
   })
 
-  test("stable prefix on emits the graph line as its own trailing volatile part", () => {
+  test("stable prefix on keeps live graph state out of the system prompt", () => {
     const tools = [{ id: "codegraph", description: "Build (or rebuild) the code graph. Extra detail." }]
     const graph = { state: "missing" } as const
     const on = policySystemParts({ tools, graph, stablePrefix: true })
-    expect(on).toHaveLength(2)
+    expect(on).toHaveLength(1)
     expect(on[0]!.text).not.toContain("Graph state:")
     expect(on[0]!.metadata).toEqual({ banyancode: { stable: true, source: "codegraph" } })
-    expect(on[1]!.text).toBe(graphLineFor(graph))
-    expect(on[1]!.metadata).toEqual({ system: { volatility: "dynamic" }, banyancode: { source: "codegraph" } })
+    expect(on[0]!.text).toContain("inspect live graph status")
     // Setting off keeps the legacy single part, byte-for-byte.
     expect(policySystemParts({ tools, graph, stablePrefix: false })).toEqual([
       { type: "text", text: renderPolicy({ tools, graph }) },
@@ -590,8 +589,9 @@ describe("codegraph system policy", () => {
     const tools = [{ id: "codegraph", description: "Build (or rebuild) the code graph. Extra detail." }]
     const first = policySystemParts({ tools, graph: { state: "building" }, stablePrefix: true })
     const second = policySystemParts({ tools, graph: { state: "ready", symbols: 1234 }, stablePrefix: true })
-    expect(second[0]).toEqual(first[0])
-    expect(second[1]!.text).not.toBe(first[1]!.text)
+    expect(second).toEqual(first)
+    expect(policySystemParts({ tools, graph: { state: "ready", symbols: 9999 }, stablePrefix: true })).toEqual(first)
+    expect(policySystemParts({ tools, graph: { state: "missing" }, stablePrefix: true })).toEqual(first)
   })
 
   test("registers the single codegraph lifecycle tool", () => {

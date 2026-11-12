@@ -350,8 +350,8 @@ export const register = (
               : ready.reason === "building"
                 ? ({ state: "building" } as const)
                 : ({ state: "missing" } as const)
-          // v1 WS3: stable policy + tool guide first, live graph readout as its
-          // own trailing part (moved behind every stable part by the host).
+          // Stable-prefix mode leaves live graph readouts in tools, so rebuilds
+          // cannot invalidate the conversation's cached system prefix.
           const loaded = yield* deps.config.get()
           event.system.push(
             ...policySystemParts({

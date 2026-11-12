@@ -112,9 +112,8 @@ export const clampMaxSubagents = (value: number | undefined): number => {
  * No manual cache hint: the auto cache policy already breakpoints the last
  * system part, and spending the breakpoint budget here would displace the
  * conversation-tail breakpoint. `banyancode_prompt_cache_stable_prefix`
- * (default true) is enforced where the volatile text lives — the codegraph
- * hook splits its live graph line into a trailing part, and the host moves
- * that part behind everything stable.
+ * (default true) is enforced by the codegraph hook, which keeps its live graph
+ * readout out of system instructions so reindexing preserves cached history.
  */
 export const register = (
   ctx: Context,

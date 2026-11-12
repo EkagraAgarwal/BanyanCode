@@ -55,6 +55,7 @@ export interface PlanInput {
   readonly providerID: string
   readonly modelID: string
   readonly sessionID: string
+  readonly chatgpt: boolean
   readonly body: Record<string, unknown>
   readonly comparisonResponseID?: string
 }
@@ -171,7 +172,13 @@ export const planBody = (input: PlanInput): BodyPlan => {
   }
 
   const mode = input.config.banyancode_prompt_cache_mode ?? "implicit"
-  if (input.providerID === "openai" && supportsPromptCacheOptions(input.modelID)) {
+  // ChatGPT sign-in uses a different API contract, even for the same model ID.
+  // Keep its cache routing key, but let the backend manage cache lifetimes and mode.
+  if (input.providerID === "openai" && input.chatgpt) {
+    remove("prompt_cache_options")
+    remove("prompt_cache_retention")
+  }
+  if (input.providerID === "openai" && !input.chatgpt && supportsPromptCacheOptions(input.modelID)) {
     if (mode === "off") {
       remove("prompt_cache_options")
     } else {

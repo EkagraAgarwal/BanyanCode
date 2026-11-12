@@ -14,9 +14,8 @@
  *      tool list).
  *
  * `renderPolicy` renders both plus the live graph readout as one block (the
- * v1 legacy order). `policySystemParts` splits the static pair from that
- * readout so `banyancode_prompt_cache_stable_prefix` can emit the volatile
- * line as its own trailing part.
+ * v1 legacy order). `policySystemParts` omits that live readout when
+ * `banyancode_prompt_cache_stable_prefix` is enabled.
  */
 export const POLICY_TEXT = [
   "## Repository intelligence is the canonical interface (ALWAYS)",
@@ -47,7 +46,7 @@ export const POLICY_TEXT = [
   "a repository tool surfaced. Read confirms a hit; it is not a search",
   "tool.",
   "",
-  "STATE 5 — verify after edits: `change_check op=edit_plan(phase=\"after\")`",
+  'STATE 5 — verify after edits: `change_check op=edit_plan(phase="after")`',
   "to re-check blast radius, then run the affected tests.",
   "",
   "NEVER: grep/glob/shell -> read -> discover the graph later. Repository",
@@ -195,13 +194,6 @@ export const renderPolicy = (input?: PolicyInput): string => {
   return parts.dynamic === undefined ? parts.stable : `${parts.stable}\n\n${parts.dynamic}`
 }
 
-/**
- * Metadata marker the host request assembly reads: a part carrying it changes
- * between turns, so the assembly moves it behind every stable part and the
- * provider's cacheable prefix survives.
- */
-export const VOLATILE_SYSTEM_METADATA = { system: { volatility: "dynamic" } } as const
-
 export interface PolicySystemPart {
   readonly type: "text"
   readonly text: string
@@ -209,26 +201,23 @@ export interface PolicySystemPart {
 }
 
 /**
- * `banyancode_prompt_cache_stable_prefix` (default true), v1 WS3 parity:
- * emit the static policy + tool guide first and the live graph readout as its
- * own trailing part. A graph-state flip then changes bytes only after the
- * cacheable prefix. With the setting off the block stays one part in the
- * legacy interleaved position.
+ * `banyancode_prompt_cache_stable_prefix` (default true):
+ * keep live graph state out of system instructions. Even a trailing system
+ * part precedes the conversation, so changing it invalidates cached history.
+ * Live state remains available through the codegraph tool. With the setting
+ * off the block keeps the legacy live readout.
  */
 export const policySystemParts = (
   input: PolicyInput & { readonly stablePrefix: boolean },
 ): ReadonlyArray<PolicySystemPart> => {
   const parts = renderPolicyParts(input)
   if (!input.stablePrefix || parts.dynamic === undefined)
-    return [
-      { type: "text", text: parts.dynamic === undefined ? parts.stable : `${parts.stable}\n\n${parts.dynamic}` },
-    ]
+    return [{ type: "text", text: parts.dynamic === undefined ? parts.stable : `${parts.stable}\n\n${parts.dynamic}` }]
   return [
-    { type: "text", text: parts.stable, metadata: { banyancode: { stable: true, source: "codegraph" } } },
     {
       type: "text",
-      text: parts.dynamic,
-      metadata: { ...VOLATILE_SYSTEM_METADATA, banyancode: { source: "codegraph" } },
+      text: `${parts.stable}\n\nUse the codegraph tool to inspect live graph status. Repository tools wait for background builds.`,
+      metadata: { banyancode: { stable: true, source: "codegraph" } },
     },
   ]
 }
