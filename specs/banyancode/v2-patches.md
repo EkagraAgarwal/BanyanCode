@@ -39,6 +39,8 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | Path | Category | Why | Upstream PR |
 | --- | --- | --- | --- |
 | `.github/workflows/*` | ci | upstream workflows removed; BanyanCode CI replaces them | — |
+| `packages/core/src/plugin/provider/chatgpt.ts` | fix | backport GPT-6.2 ChatGPT model availability | [#64508](https://github.com/anomalyco/opencode/pull/64508) |
+| `packages/core/test/plugin/provider-chatgpt.test.ts` | fix | cover GPT-6.2 ChatGPT model availability | [#64508](https://github.com/anomalyco/opencode/pull/64508) |
 | `packages/core/src/plugin/internal.ts` | hook | register `@banyancode/plugin` as a guarded built-in (`post` list + `guarded` set) | — |
 | `packages/core/package.json` | hook | workspace dependency on `@banyancode/plugin` for the built-in import | — |
 | `packages/cli/package.json` | branding | banyancode bin alias; `pack`/`publish` scripts point at `script/banyancode/{pack,publish}.ts` | — |
